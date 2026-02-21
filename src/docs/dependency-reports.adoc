@@ -1,0 +1,3 @@
+= Dependency Reports
+
+include::../../target/jqassistant/report/groovy-reports/external-dependency-scm.adoc[leveloffset=+1]

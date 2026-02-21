@@ -1,0 +1,84 @@
+<jqassistant-rules xmlns="http://schema.jqassistant.org/rule/v2.2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://schema.jqassistant.org/rule/v2.2 https://jqassistant.github.io/jqassistant/current/schema/jqassistant-rule-v2.2.xsd">
+
+    <group id="external-dependency-scm">
+        <includeConcept refId="dependency-report:ExternalDependencyScm"/>
+    </group>
+
+    <!-- External dependency SCM overview with normalized URLs and usage count -->
+    <concept id="dependency-report:ExternalDependencyScm">
+        <description>External dependencies with normalized SCM URLs from their POM metadata, platform classification, and usage count.</description>
+        <cypher><![CDATA[
+// Collect unique external dependencies with usage count
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+  AND NOT a.group STARTS WITH 'org.apache.maven'
+  AND NOT a.group STARTS WITH 'org.codehaus.plexus'
+  AND NOT a.group STARTS WITH 'org.eclipse.sisu'
+WITH a.group AS depGroup, a.name AS depArtifact,
+     collect(DISTINCT a.version) AS allVersions,
+     count(DISTINCT p.groupId + ':' + p.artifactId) AS usedByProjects
+// Pick the latest (last) version to look up its POM SCM
+WITH depGroup, depArtifact, allVersions, usedByProjects,
+     allVersions[-1] AS latestVersion
+// Look up SCM URL from the dependency's own POM in META-INF
+OPTIONAL MATCH (da:Maven:Artifact)-[:CONTAINS]->(pom:Maven:Pom)
+  -[:HAS_ROOT_ELEMENT]->(root:Xml:Element)
+  -[:HAS_ELEMENT]->(scmEl:Xml:Element {name: 'scm'})
+  -[:HAS_ELEMENT]->(scmUrlEl:Xml:Element {name: 'url'})
+  -[:HAS_TEXT]->(scmText)
+WHERE pom.fileName STARTS WITH '/META-INF/'
+  AND da.group = depGroup AND da.name = depArtifact
+WITH depGroup, depArtifact, allVersions, usedByProjects,
+     collect(DISTINCT scmText.value) AS scmUrls
+// Fallback: look up project <url> element if no <scm> found
+OPTIONAL MATCH (da2:Maven:Artifact)-[:CONTAINS]->(pom2:Maven:Pom)
+  -[:HAS_ROOT_ELEMENT]->(root2:Xml:Element)
+  -[:HAS_ELEMENT]->(projUrlEl:Xml:Element {name: 'url'})
+  -[:HAS_TEXT]->(projText)
+WHERE pom2.fileName STARTS WITH '/META-INF/'
+  AND da2.group = depGroup AND da2.name = depArtifact
+  AND NOT EXISTS { (root2)-[:HAS_ELEMENT]->(:Xml:Element {name: 'scm'}) }
+WITH depGroup, depArtifact, allVersions, usedByProjects,
+     scmUrls, collect(DISTINCT projText.value) AS projectUrls
+// Pick SCM URL first, then fall back to project URL
+WITH depGroup, depArtifact, allVersions, usedByProjects,
+     CASE
+       WHEN size(scmUrls) > 0 THEN scmUrls[0]
+       WHEN size(projectUrls) > 0 THEN projectUrls[0]
+       ELSE 'n/a'
+     END AS scmUrl,
+     CASE
+       WHEN size(scmUrls) > 0 THEN 'scm'
+       WHEN size(projectUrls) > 0 THEN 'project-url'
+       ELSE 'none'
+     END AS urlSource
+// Classify the hosting platform
+RETURN depGroup, depArtifact,
+       allVersions AS versions,
+       usedByProjects,
+       scmUrl,
+       urlSource,
+       CASE
+         WHEN scmUrl CONTAINS 'github.com' THEN 'GitHub'
+         WHEN scmUrl CONTAINS 'gitlab' THEN 'GitLab'
+         WHEN scmUrl CONTAINS 'bitbucket.org' THEN 'Bitbucket'
+         WHEN scmUrl CONTAINS 'gitbox.apache.org' OR scmUrl CONTAINS 'git-wip-us.apache.org' THEN 'Apache Gitbox'
+         WHEN scmUrl CONTAINS 'svn.apache.org' OR scmUrl CONTAINS 'svn.sourceforge.net' THEN 'SVN'
+         WHEN scmUrl CONTAINS 'code.google.com' THEN 'Google Code'
+         WHEN scmUrl = 'n/a' THEN 'unknown'
+         ELSE 'other'
+       END AS platform
+ORDER BY platform, depGroup, depArtifact
+        ]]></cypher>
+        <report type="Groovy">
+            <property name="scriptname">jqassistant/groovy/listExternalDependencyScm.groovy</property>
+        </report>
+    </concept>
+
+</jqassistant-rules>

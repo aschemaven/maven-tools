@@ -16,6 +16,10 @@ jqassistant:
       directory.follow-symbolic-links: true
       maven3.dependencies.scan: true
   analyze:
+    groups:
+      - default
+      - dependency-reports
+      - external-dependency-scm
     rule:
       directory: jqassistant/rules/
     report:

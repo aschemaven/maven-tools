@@ -1,0 +1,285 @@
+<jqassistant-rules xmlns="http://schema.jqassistant.org/rule/v2.2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://schema.jqassistant.org/rule/v2.2 https://jqassistant.github.io/jqassistant/current/schema/jqassistant-rule-v2.2.xsd">
+
+    <group id="dependency-reports">
+        <includeConcept refId="dependency-report:FullDependencyMatrix"/>
+        <includeConcept refId="dependency-report:VersionSpreadPerGeneration"/>
+        <includeConcept refId="dependency-report:VersionInconsistencies"/>
+        <includeConcept refId="dependency-report:CrossGenerationComparison"/>
+        <includeConcept refId="dependency-report:ProjectOverview"/>
+        <includeConcept refId="dependency-report:ExternalDependencies"/>
+        <includeConcept refId="dependency-report:ManagedVsDeclaredDependencies"/>
+        <includeConcept refId="dependency-report:ExternalDependencyReferenceCount"/>
+    </group>
+
+    <!-- 1. Full dependency matrix with Maven generation -->
+    <concept id="dependency-report:FullDependencyMatrix">
+        <description>Full dependency matrix with Maven generation classification for all projects.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+RETURN CASE
+         WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+           OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+           OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+           THEN 'maven4'
+         WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+           THEN 'maven3-legacy'
+         WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+           OR p.fileName =~ '.*/shared/.*'
+           THEN 'maven3'
+         ELSE 'other'
+       END AS mavenGeneration,
+       p.groupId AS projectGroup,
+       p.artifactId AS projectArtifact,
+       p.version AS projectVersion,
+       scm.url AS projectScm,
+       a.group AS depGroup,
+       a.name AS depArtifact,
+       a.version AS depVersion,
+       a.type AS depType,
+       d.optional AS optional
+ORDER BY mavenGeneration, projectGroup, projectArtifact, projectVersion, depGroup, depArtifact
+        ]]></cypher>
+    </concept>
+
+    <!-- 2. Dependency version spread per Maven generation -->
+    <concept id="dependency-report:VersionSpreadPerGeneration">
+        <description>Version variants per Maven generation — useful for spotting where Maven 3 and Maven 4 diverge on the same dependency.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+         THEN 'maven3-legacy'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         THEN 'maven3'
+       ELSE 'other'
+     END AS mavenGeneration,
+     a.group AS depGroup, a.name AS depArtifact, a.version AS depVersion,
+     p.groupId + ':' + p.artifactId AS projectGA
+WITH mavenGeneration, depGroup, depArtifact,
+     collect(DISTINCT depVersion) AS versions,
+     count(DISTINCT projectGA) AS usedByProjects
+RETURN mavenGeneration, depGroup, depArtifact, versions,
+       size(versions) AS versionCount, usedByProjects
+ORDER BY mavenGeneration, usedByProjects DESC
+        ]]></cypher>
+    </concept>
+
+    <!-- 3. Version inconsistencies per Maven generation -->
+    <concept id="dependency-report:VersionInconsistencies">
+        <description>Dependencies with multiple versions within the same Maven generation.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+         THEN 'maven3-legacy'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         THEN 'maven3'
+       ELSE 'other'
+     END AS mavenGeneration,
+     a.group AS depGroup, a.name AS depArtifact, a.version AS depVersion,
+     p.groupId + ':' + p.artifactId AS projectGA
+WITH mavenGeneration, depGroup, depArtifact,
+     collect(DISTINCT depVersion) AS versions,
+     count(DISTINCT projectGA) AS usedByProjects
+WHERE size(versions) > 1
+RETURN mavenGeneration, depGroup, depArtifact, versions,
+       size(versions) AS versionCount, usedByProjects
+ORDER BY mavenGeneration, versionCount DESC, usedByProjects DESC
+        ]]></cypher>
+    </concept>
+
+    <!-- 4. Cross-generation comparison: same dependency, different versions -->
+    <concept id="dependency-report:CrossGenerationComparison">
+        <description>Dependencies that exist in both Maven 3 and Maven 4 with their respective version sets — useful for migration planning.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         OR p.fileName CONTAINS '/3.x/'
+         THEN 'maven3'
+       ELSE null
+     END AS gen,
+     a.group AS depGroup, a.name AS depArtifact, a.version AS depVersion
+WHERE gen IS NOT NULL
+WITH depGroup, depArtifact, gen, collect(DISTINCT depVersion) AS versions
+WITH depGroup, depArtifact,
+     collect({generation: gen, versions: versions}) AS genVersions
+WHERE size(genVersions) > 1
+RETURN depGroup, depArtifact,
+       [gv IN genVersions WHERE gv.generation = 'maven3' | gv.versions][0] AS maven3Versions,
+       [gv IN genVersions WHERE gv.generation = 'maven4' | gv.versions][0] AS maven4Versions
+ORDER BY depGroup, depArtifact
+        ]]></cypher>
+    </concept>
+
+    <!-- 5. Project overview with Maven generation and SCM -->
+    <concept id="dependency-report:ProjectOverview">
+        <description>Project overview with Maven generation classification, SCM info, and dependency count.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+OPTIONAL MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+WHERE NOT a.version STARTS WITH '${'
+RETURN CASE
+         WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+           OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+           OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+           THEN 'maven4'
+         WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+           THEN 'maven3-legacy'
+         WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+           OR p.fileName =~ '.*/shared/.*'
+           THEN 'maven3'
+         ELSE 'other'
+       END AS mavenGeneration,
+       p.groupId AS projectGroup,
+       p.artifactId AS projectArtifact,
+       p.version AS projectVersion,
+       scm.url AS projectScm,
+       count(DISTINCT a.group + ':' + a.name) AS dependencyCount
+ORDER BY mavenGeneration, projectGroup, projectArtifact, projectVersion
+        ]]></cypher>
+    </concept>
+
+    <!-- 6. External (non-Apache) dependencies per Maven generation -->
+    <concept id="dependency-report:ExternalDependencies">
+        <description>External (non-Apache/Plexus/Sisu) dependencies per Maven generation with version spread and usage count.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+  AND NOT a.group STARTS WITH 'org.apache.maven'
+  AND NOT a.group STARTS WITH 'org.codehaus.plexus'
+  AND NOT a.group STARTS WITH 'org.eclipse.sisu'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+         THEN 'maven3-legacy'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         THEN 'maven3'
+       ELSE 'other'
+     END AS mavenGeneration,
+     a.group AS depGroup, a.name AS depArtifact, a.version AS depVersion,
+     p.groupId + ':' + p.artifactId AS projectGA
+RETURN mavenGeneration, depGroup, depArtifact,
+       collect(DISTINCT depVersion) AS versions,
+       count(DISTINCT projectGA) AS usedByProjects
+ORDER BY mavenGeneration, usedByProjects DESC
+        ]]></cypher>
+    </concept>
+
+    <!-- 7. Managed vs declared dependencies per generation -->
+    <concept id="dependency-report:ManagedVsDeclaredDependencies">
+        <description>Comparison of managed vs declared dependency counts per project and Maven generation.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+         THEN 'maven3-legacy'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         THEN 'maven3'
+       ELSE 'other'
+     END AS mavenGeneration,
+     em, p, scm
+OPTIONAL MATCH (em)-[:DECLARES_DEPENDENCY]->(dd)-[:TO_ARTIFACT]->(da)
+OPTIONAL MATCH (em)-[:MANAGES_DEPENDENCY]->(md)-[:TO_ARTIFACT]->(ma)
+RETURN mavenGeneration,
+       p.groupId + ':' + p.artifactId AS project,
+       p.version AS version,
+       scm.url AS scm,
+       count(DISTINCT da.group + ':' + da.name) AS declaredDeps,
+       count(DISTINCT ma.group + ':' + ma.name) AS managedDeps
+ORDER BY mavenGeneration, managedDeps DESC
+LIMIT 50
+        ]]></cypher>
+    </concept>
+
+    <!-- 8. External dependency reference count per version and generation -->
+    <concept id="dependency-report:ExternalDependencyReferenceCount">
+        <description>Reference count per external dependency version, grouped by Maven generation. Excludes Maven-internal dependencies.</description>
+        <cypher><![CDATA[
+MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
+MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
+MATCH (em)-[:HAS_SCM]->(scm)
+WHERE NOT p.version CONTAINS 'stub'
+  AND NOT scm.url CONTAINS 'core-it-support'
+  AND NOT a.version STARTS WITH '${'
+  AND NOT a.group STARTS WITH 'org.apache.maven'
+  AND NOT a.group STARTS WITH 'org.codehaus.plexus'
+  AND NOT a.group STARTS WITH 'org.eclipse.sisu'
+WITH CASE
+       WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
+         OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
+         OR p.fileName =~ '.*/(core/resolver|core/mvnd|core/wrapper|core/build-cache)(/.*|$)'
+         THEN 'maven4'
+       WHEN p.fileName CONTAINS '/3.x/' OR p.fileName CONTAINS '/3.9.x'
+         THEN 'maven3-legacy'
+       WHEN p.fileName =~ '.*/plugins/(core|packaging)/.*'
+         OR p.fileName =~ '.*/shared/.*'
+         THEN 'maven3'
+       ELSE 'other'
+     END AS mavenGeneration,
+     a.group AS depGroup, a.name AS depArtifact, a.version AS depVersion,
+     p.groupId + ':' + p.artifactId AS projectGA
+RETURN mavenGeneration, depGroup, depArtifact, depVersion,
+       count(DISTINCT projectGA) AS referenceCount
+ORDER BY mavenGeneration, depGroup, depArtifact, referenceCount DESC
+        ]]></cypher>
+    </concept>
+
+
+</jqassistant-rules>
