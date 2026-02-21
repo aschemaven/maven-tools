@@ -78,10 +78,27 @@ def normalizeUrl(String raw) {
     if (url.startsWith('http://gitlab.com')) {
         url = url.replace('http://gitlab.com', 'https://gitlab.com')
     }
+    if (url.startsWith('http://svn.apache.org')) {
+        url = url.replace('http://svn.apache.org', 'https://svn.apache.org')
+    }
+    // Apache Gitbox/git-wip-us → GitHub mirror
+    // Handles: gitbox.apache.org/repos/asf?p=NAME and gitbox.apache.org/repos/asf/NAME
+    def gitboxMatcher = url =~ /https?:\/\/(?:gitbox|git-wip-us)\.apache\.org\/repos\/asf[\/?](?:p=)?([a-zA-Z0-9_.-]+)/
+    if (gitboxMatcher.find()) {
+        url = "https://github.com/apache/${gitboxMatcher[0][1]}"
+    }
+    // GitHub submodule paths → repo root (e.g. jline/jline3/jline-reader → jline/jline3)
+    // Only strip if the path segment after owner/repo is NOT a known GitHub path (tree, blob, issues, etc.)
+    def subpathMatcher = url =~ /^(https:\/\/github\.com\/[^\/]+\/[^\/]+)\/(?!tree\/|blob\/|issues|pulls|releases|actions|wiki)(.+)/
+    if (subpathMatcher.matches()) {
+        url = subpathMatcher[0][1]
+    }
     // Strip trailing .git
     url = url.replaceFirst(/\.git$/, '')
     // Strip trailing /
     url = url.replaceFirst(/\/$/, '')
+    // Strip GitHub /tree/... suffixes (tag/branch paths that may be stale)
+    url = url.replaceFirst(/\/tree\/.*$/, '')
     return url
 }
 
@@ -158,18 +175,17 @@ entries.each { e ->
             e.homepage = normalizeUrl(depsResult.homepage)
         }
     }
-    // Apply manual override (highest priority, even overwriting deps.dev)
-    if (!e.normalizedUrl) {
-        def overrideKey = "${e.depGroup}:${e.depArtifact}"
-        def overrideUrl = overrides.getProperty(overrideKey)?.trim()
-        if (overrideUrl && overrideUrl != 'NONE') {
-            e.normalizedUrl = normalizeUrl(overrideUrl)
-            e.platform = classifyPlatform(e.normalizedUrl)
-            e.urlSource = 'override'
-            overrideCount++
-        } else if (overrideUrl == 'NONE') {
-            e.urlSource = 'override-none'
-        }
+    // Apply manual override (highest priority, overwrites POM/deps.dev URLs)
+    def overrideKey = "${e.depGroup}:${e.depArtifact}"
+    def overrideUrl = overrides.getProperty(overrideKey)?.trim()
+    if (overrideUrl && overrideUrl != 'NONE') {
+        e.normalizedUrl = normalizeUrl(overrideUrl)
+        e.platform = classifyPlatform(e.normalizedUrl)
+        e.urlSource = 'override'
+        overrideCount++
+    } else if (overrideUrl == 'NONE') {
+        e.normalizedUrl = null
+        e.urlSource = 'override-none'
     }
 }
 logger.info("Enriched {} entries via deps.dev (cache size: {}), {} via manual overrides", enrichedCount, cache.size(), overrideCount)

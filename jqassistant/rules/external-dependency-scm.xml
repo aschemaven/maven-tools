@@ -58,6 +58,34 @@ WITH depGroup, depArtifact, allVersions, usedByProjects,
        WHEN size(projectUrls) > 0 THEN 'project-url'
        ELSE 'none'
      END AS urlSource
+// Normalize: http->https, gitbox->github, strip GitHub subpaths and /tree/...
+WITH depGroup, depArtifact, allVersions, usedByProjects, urlSource,
+     CASE
+       WHEN scmUrl STARTS WITH 'http://github.com'
+         THEN replace(scmUrl, 'http://github.com', 'https://github.com')
+       WHEN scmUrl STARTS WITH 'http://www.slf4j.org'
+         THEN replace(scmUrl, 'http://', 'https://')
+       WHEN scmUrl STARTS WITH 'http://www.eclipse.org'
+         THEN replace(scmUrl, 'http://', 'https://')
+       WHEN scmUrl STARTS WITH 'http://hc.apache.org'
+         THEN replace(scmUrl, 'http://', 'https://')
+       WHEN scmUrl STARTS WITH 'http://svn.apache.org'
+         THEN replace(scmUrl, 'http://', 'https://')
+       ELSE scmUrl
+     END AS rawUrl
+WITH depGroup, depArtifact, allVersions, usedByProjects, urlSource,
+     CASE
+       // Apache Gitbox -> GitHub
+       WHEN rawUrl =~ 'https?://(?:gitbox|git-wip-us)\\.apache\\.org/repos/asf.*'
+         THEN 'https://github.com/apache/' + last(split(replace(replace(rawUrl, '?p=', '/'), '.git', ''), '/'))
+       // Strip /tree/... tag paths
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/tree/.*'
+         THEN substring(rawUrl, 0, apoc.text.indexOf(rawUrl, '/tree/'))
+       // Strip GitHub subpaths beyond owner/repo
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/.+'
+         THEN 'https://github.com/' + split(rawUrl, '/')[3] + '/' + split(rawUrl, '/')[4]
+       ELSE rawUrl
+     END AS scmUrl
 // Classify the hosting platform
 RETURN depGroup, depArtifact,
        allVersions AS versions,

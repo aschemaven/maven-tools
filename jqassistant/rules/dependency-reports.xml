@@ -23,6 +23,29 @@ MATCH (em)-[:HAS_SCM]->(scm)
 WHERE NOT p.version CONTAINS 'stub'
   AND NOT scm.url CONTAINS 'core-it-support'
   AND NOT a.version STARTS WITH '${'
+// Normalize SCM URL: http->https, strip /tree/... and GitHub subpaths
+WITH p, em, d, a, scm,
+     CASE
+       WHEN scm.url STARTS WITH 'http://github.com'
+         THEN replace(scm.url, 'http://github.com', 'https://github.com')
+       WHEN scm.url STARTS WITH 'http://www.slf4j.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       WHEN scm.url STARTS WITH 'http://www.eclipse.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       WHEN scm.url STARTS WITH 'http://svn.apache.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       ELSE scm.url
+     END AS rawUrl
+WITH p, em, d, a,
+     CASE
+       // Strip /tree/... tag paths (e.g. /tree/wagon-4.0.0-M1/...)
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/tree/.*'
+         THEN substring(rawUrl, 0, apoc.text.indexOf(rawUrl, '/tree/'))
+       // Strip GitHub subpaths beyond owner/repo (e.g. /owner/repo/submodule)
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/.+'
+         THEN 'https://github.com/' + split(rawUrl, '/')[3] + '/' + split(rawUrl, '/')[4]
+       ELSE rawUrl
+     END AS projectScm
 RETURN CASE
          WHEN p.fileName CONTAINS '/core-4/' OR p.fileName CONTAINS '/packaging-4/'
            OR p.fileName CONTAINS '/shared-4/' OR p.fileName =~ '.*/(core/maven|core/maven-4)(/.*|$)'
@@ -38,7 +61,7 @@ RETURN CASE
        p.groupId AS projectGroup,
        p.artifactId AS projectArtifact,
        p.version AS projectVersion,
-       scm.url AS projectScm,
+       projectScm,
        a.group AS depGroup,
        a.name AS depArtifact,
        a.version AS depVersion,
@@ -157,6 +180,27 @@ MATCH (p:Maven:Project)-[:HAS_EFFECTIVE_MODEL]->(em)
 MATCH (em)-[:HAS_SCM]->(scm)
 WHERE NOT p.version CONTAINS 'stub'
   AND NOT scm.url CONTAINS 'core-it-support'
+// Normalize SCM URL: http->https, strip /tree/... and GitHub subpaths
+WITH p, em, scm,
+     CASE
+       WHEN scm.url STARTS WITH 'http://github.com'
+         THEN replace(scm.url, 'http://github.com', 'https://github.com')
+       WHEN scm.url STARTS WITH 'http://www.slf4j.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       WHEN scm.url STARTS WITH 'http://www.eclipse.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       WHEN scm.url STARTS WITH 'http://svn.apache.org'
+         THEN replace(scm.url, 'http://', 'https://')
+       ELSE scm.url
+     END AS rawUrl
+WITH p, em,
+     CASE
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/tree/.*'
+         THEN substring(rawUrl, 0, apoc.text.indexOf(rawUrl, '/tree/'))
+       WHEN rawUrl =~ 'https://github\\.com/[^/]+/[^/]+/.+'
+         THEN 'https://github.com/' + split(rawUrl, '/')[3] + '/' + split(rawUrl, '/')[4]
+       ELSE rawUrl
+     END AS projectScm
 OPTIONAL MATCH (em)-[:DECLARES_DEPENDENCY]->(d)-[:TO_ARTIFACT]->(a)
 WHERE NOT a.version STARTS WITH '${'
 RETURN CASE
@@ -174,7 +218,7 @@ RETURN CASE
        p.groupId AS projectGroup,
        p.artifactId AS projectArtifact,
        p.version AS projectVersion,
-       scm.url AS projectScm,
+       projectScm,
        count(DISTINCT a.group + ':' + a.name) AS dependencyCount
 ORDER BY mavenGeneration, projectGroup, projectArtifact, projectVersion
         ]]></cypher>
