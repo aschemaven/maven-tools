@@ -12,7 +12,7 @@
             <plugin>
                 <groupId>com.buschmais.jqassistant</groupId>
                 <artifactId>jqassistant-maven-plugin</artifactId>
-                <version>2.9.0</version> <!-- Adjust to the latest version -->
+                <version>2.9.1</version> <!-- Adjust to the latest version -->
                 <executions>
                     <execution>
                         <phase>verify</phase>
@@ -79,4 +79,29 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>html-sanity-check</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.aim42.htmlSanityCheck</groupId>
+                        <artifactId>htmlSanityCheck-maven-plugin</artifactId>
+                        <version>2.0.0-rc4</version>
+                        <configuration>
+                            <sourceDir>${project.build.directory}/generated-docs</sourceDir>
+                            <sourceDocuments>
+                                <sourceDocument>${project.build.directory}/generated-docs/index.html</sourceDocument>
+                                <sourceDocument>${project.build.directory}/generated-docs/dependency-reports.html</sourceDocument>
+                                <sourceDocument>${project.build.directory}/generated-docs/github-reports.html</sourceDocument>
+                                <sourceDocument>${project.build.directory}/generated-docs/full-jqa-report.html</sourceDocument>
+                            </sourceDocuments>
+                            <checkingResultsDir>${project.build.directory}/hsc</checkingResultsDir>
+                            <excludes>^https?://(java.net|svn\..*)/.*$</excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
