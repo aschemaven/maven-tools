@@ -13,6 +13,17 @@ if (cacheFile.exists()) {
     logger.info("Loaded {} cached deps.dev entries", cache.size())
 }
 
+// --- OpenSSF Scorecard cache ---
+// Cache: key = "owner/repo", value = "score|date|Maintained|Code-Review|Vulnerabilities|Security-Policy|Dependency-Update-Tool|Branch-Protection|License"
+File scorecardCacheDir = new File(reportDirectory, "scorecard-cache")
+scorecardCacheDir.mkdirs()
+File scorecardCacheFile = new File(scorecardCacheDir, "scorecard.properties")
+Properties scorecardCache = new Properties()
+if (scorecardCacheFile.exists()) {
+    scorecardCacheFile.withInputStream { scorecardCache.load(it) }
+    logger.info("Loaded {} cached Scorecard entries", scorecardCache.size())
+}
+
 /**
  * Query deps.dev API for source repository and homepage.
  * Returns [sourceRepo: url, homepage: url] or nulls.
@@ -54,6 +65,77 @@ def lookupDepsDev(String group, String artifact, String version, Properties cach
     cache.setProperty(cacheKey, "${sourceRepo ?: ''}|${homepage ?: ''}")
     cacheFile.withOutputStream { cache.store(it, "deps.dev lookup cache") }
     return [sourceRepo: sourceRepo, homepage: homepage]
+}
+
+// Scorecard checks we want to extract (order matters for cache value format)
+def SCORECARD_CHECKS = ['Maintained', 'Code-Review', 'Vulnerabilities', 'Security-Policy',
+                         'Dependency-Update-Tool', 'Branch-Protection', 'License']
+
+/**
+ * Query the OpenSSF Scorecard API for a GitHub repository.
+ * Returns a map with 'score' (overall), 'date', and per-check scores, or nulls on failure.
+ * Uses file-based cache to avoid repeated API calls.
+ */
+def lookupScorecard(String owner, String repo, List checkNames, Properties scCache, File scCacheFile) {
+    def cacheKey = "${owner}/${repo}"
+    if (scCache.containsKey(cacheKey)) {
+        def cached = scCache.getProperty(cacheKey)
+        if (cached == 'ERROR') {
+            return null
+        }
+        def parts = cached.split(/\|/, -1)
+        if (parts.length >= 2 + checkNames.size()) {
+            def result = [score: parts[0] ? parts[0].toFloat() : null, date: parts[1] ?: null, checks: [:]]
+            checkNames.eachWithIndex { name, i ->
+                result.checks[name] = parts[2 + i] ? parts[2 + i].toFloat() : null
+            }
+            return result
+        }
+    }
+
+    try {
+        def apiUrl = "https://api.securityscorecards.dev/projects/github.com/${owner}/${repo}"
+        def conn = new URL(apiUrl).openConnection()
+        conn.setRequestProperty("Accept", "application/json")
+        conn.connectTimeout = 10000
+        conn.readTimeout = 15000
+        if (conn.responseCode == 200) {
+            def body = conn.inputStream.text
+
+            // Extract overall score
+            def scoreMatcher = body =~ /"score"\s*:\s*([0-9.]+)/
+            def score = scoreMatcher.find() ? scoreMatcher[0][1].toFloat() : null
+
+            // Extract date
+            def dateMatcher = body =~ /"date"\s*:\s*"([^"]+)"/
+            def date = dateMatcher.find() ? dateMatcher[0][1] : null
+
+            // Extract per-check scores
+            // JSON pattern: {"name":"CheckName",...,"score":N,...}
+            def checks = [:]
+            checkNames.each { checkName ->
+                def checkPattern = ~/"name"\s*:\s*"${checkName}"[^}]*?"score"\s*:\s*(-?[0-9]+)/
+                def m = checkPattern.matcher(body)
+                checks[checkName] = m.find() ? m[0][1].toFloat() : null
+            }
+
+            // Build cache value: score|date|check1|check2|...
+            def cacheValue = "${score ?: ''}|${date ?: ''}"
+            checkNames.each { cacheValue += "|${checks[it] != null ? checks[it] : ''}" }
+            scCache.setProperty(cacheKey, cacheValue)
+            scCacheFile.withOutputStream { scCache.store(it, "OpenSSF Scorecard cache") }
+
+            return [score: score, date: date, checks: checks]
+        } else {
+            // Cache errors (404 = not scored, etc.) to avoid re-querying
+            scCache.setProperty(cacheKey, "ERROR")
+            scCacheFile.withOutputStream { scCache.store(it, "OpenSSF Scorecard cache") }
+            return null
+        }
+    } catch (Exception ex) {
+        // Network error: don't cache, allow retry next run
+        return null
+    }
 }
 
 /**
@@ -271,6 +353,78 @@ For each, the Maven projects that declare them are listed.
     }
 }
 
+// --- OpenSSF Scorecard enrichment ---
+// Collect unique GitHub repos and look up their scorecards
+def githubRepos = [:] // key: "owner/repo", value: list of entries
+entries.each { e ->
+    if (e.normalizedUrl && e.normalizedUrl.contains('github.com')) {
+        def ghMatcher = e.normalizedUrl =~ /https:\/\/github\.com\/([^\/]+)\/([^\/]+)/
+        if (ghMatcher.find()) {
+            def repoKey = "${ghMatcher[0][1]}/${ghMatcher[0][2]}"
+            if (!githubRepos.containsKey(repoKey)) {
+                githubRepos[repoKey] = []
+            }
+            githubRepos[repoKey] << e
+        }
+    }
+}
+logger.info("Found {} unique GitHub repositories for Scorecard lookup", githubRepos.size())
+
+def scorecardResults = [:] // key: "owner/repo", value: scorecard result map
+def scorecardCount = 0
+githubRepos.keySet().sort().each { repoKey ->
+    def parts = repoKey.split('/')
+    def sc = lookupScorecard(parts[0], parts[1], SCORECARD_CHECKS, scorecardCache, scorecardCacheFile)
+    if (sc) {
+        scorecardResults[repoKey] = sc
+        scorecardCount++
+    }
+}
+logger.info("Retrieved {} Scorecard results (cache size: {})", scorecardCount, scorecardCache.size())
+
+// --- Scorecard AsciiDoc section ---
+adocOutput.append("""
+
+== OpenSSF Scorecard Results
+
+Security scorecards for ${githubRepos.size()} unique GitHub repositories,
+retrieved from the https://securityscorecards.dev[OpenSSF Scorecard] API.
+
+[cols="4,1,1,1,1,1,1,1,1", options="header"]
+|===
+| Repository | Score | Maintained | Code Review | Vulnerabilities | Security Policy | Dep Updates | Branch Prot | License
+
+""")
+
+githubRepos.keySet().sort().each { repoKey ->
+    def sc = scorecardResults[repoKey]
+    def repoUrl = "https://github.com/${repoKey}"
+    def repoLink = "${repoUrl}[${repoKey}]"
+    if (sc) {
+        def fmt = { val -> val != null ? (val == Math.floor(val) ? "${val.intValue()}" : String.format(Locale.US, "%.1f", val)) : '-' }
+        adocOutput.append("| ${repoLink} | *${fmt(sc.score)}* | ${fmt(sc.checks['Maintained'])} | ${fmt(sc.checks['Code-Review'])} | ${fmt(sc.checks['Vulnerabilities'])} | ${fmt(sc.checks['Security-Policy'])} | ${fmt(sc.checks['Dependency-Update-Tool'])} | ${fmt(sc.checks['Branch-Protection'])} | ${fmt(sc.checks['License'])}\n")
+    } else {
+        adocOutput.append("| ${repoLink} | _n/a_ | | | | | | |\n")
+    }
+}
+adocOutput.append("\n|===\n")
+
+// Summary statistics
+if (scorecardResults) {
+    def scores = scorecardResults.values().collect { it.score }.findAll { it != null }
+    def avgScore = scores ? (scores.sum() / scores.size()) : 0
+    def lowScore = scores.findAll { it < 4.0 }
+    def highScore = scores.findAll { it >= 7.0 }
+    adocOutput.append("""
+=== Summary
+
+* *${scores.size()}* repositories scored (${githubRepos.size() - scores.size()} not available)
+* Average score: *${String.format(Locale.US, "%.1f", avgScore)}* / 10
+* High scores (>= 7.0): *${highScore.size()}*
+* Low scores (< 4.0): *${lowScore.size()}*
+""")
+}
+
 // --- YAML report ---
 File yamlOutput = new File(reportDirectory, "external-dependency-scm.yaml")
 yamlOutput.delete()
@@ -298,5 +452,22 @@ entries.each { e ->
     }
     if (e.scmUrl && e.scmUrl != 'n/a' && e.scmUrl != e.normalizedUrl) {
         yamlOutput.append("    scm-url-raw: \"${e.scmUrl}\"\n")
+    }
+    // Add scorecard data if available for this entry's GitHub repo
+    if (e.normalizedUrl && e.normalizedUrl.contains('github.com')) {
+        def ghM = e.normalizedUrl =~ /https:\/\/github\.com\/([^\/]+)\/([^\/]+)/
+        if (ghM.find()) {
+            def rk = "${ghM[0][1]}/${ghM[0][2]}"
+            def sc = scorecardResults[rk]
+            if (sc) {
+                yamlOutput.append("    scorecard:\n")
+                yamlOutput.append("      score: ${sc.score}\n")
+                yamlOutput.append("      date: \"${sc.date}\"\n")
+                yamlOutput.append("      checks:\n")
+                sc.checks.each { name, val ->
+                    yamlOutput.append("        ${name}: ${val != null ? val : 'null'}\n")
+                }
+            }
+        }
     }
 }
