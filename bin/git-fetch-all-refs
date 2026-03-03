@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+# NAME
+#   git-fetch-all-refs - Configure and fetch all remote refs for a Git repository
+#
+# SYNOPSIS
+#   git-fetch-all-refs
+#   repo forall -c "${PWD}/../bin/git-fetch-all-refs"
+#
+# DESCRIPTION
+#   Adds extra fetch refspecs to the 'origin' remote so that future
+#   git fetch/pull operations also retrieve PR branches and notes.
+#   Then performs a fetch to pull in all refs immediately.
+#
+#   Intended for use with the 'repo' tool across all Maven repositories
+#   so that jQAssistant's Git plugin can analyze the full commit history
+#   including pull request branches.
+#
+#   Idempotent: safe to run multiple times without duplicating refspecs.
+
+set -eu -o pipefail
+
+REMOTE="${1:-origin}"
+
+# Refspecs to add (GitHub PR heads and Git notes)
+REFSPECS=(
+    "+refs/pull/*/head:refs/remotes/${REMOTE}/pr/*"
+    "+refs/notes/*:refs/notes/*"
+)
+
+for refspec in "${REFSPECS[@]}"; do
+    # Check if this refspec is already configured
+    if ! git config --get-all "remote.${REMOTE}.fetch" | grep -qF "${refspec}"; then
+        git config --add "remote.${REMOTE}.fetch" "${refspec}"
+        echo "Added refspec: ${refspec}"
+    fi
+done
+
+# Fetch all refs from the remote
+git fetch "${REMOTE}"

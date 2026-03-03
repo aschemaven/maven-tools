@@ -21,6 +21,10 @@ hash -r
 
 repo sync
 
+# Configure extra fetch refspecs (PR branches, notes) and fetch all refs.
+# This ensures jQAssistant's Git plugin sees the full commit history.
+repo forall -c "${PWD}/../bin/git-fetch-all-refs"
+
 # Start each project on its manifest-specified branch (REPO_RREV).
 # Projects with a custom 'revision' attribute get their own branch,
 # others get the manifest default.
