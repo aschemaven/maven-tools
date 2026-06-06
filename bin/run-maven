@@ -9,18 +9,24 @@ fi
 # This script executes Maven goals for multiple projects with specific options and configurations.
 #
 # SYNOPSIS
-#   run-maven [Maven goals...]
+#   run-maven [--clean] [Maven goals...]
 #
 # DESCRIPTION
 #   This script automates the execution of Maven goals for a list of projects defined
 #   in an environment variable `PROJECTS`. It ensures that Maven uses a specific local
 #   repository directory and applies provided goals across all projects sequentially.
 #
+#   Before running the goals, the script checks each project for workspace pollution
+#   (e.g. leftover jqassistant/store directories, untracked root-level files that would
+#   trip Apache RAT). By default it aborts if any is found. Pass --clean as the first
+#   argument to remove the pollution and continue.
+#
 #   The script reads common functions from the `common-functions.sh` file located in the
 #   same directory as the script itself.
 #
 # USAGE EXAMPLE
 #   run-maven clean install
+#   run-maven --clean clean install
 #
 # ENVIRONMENT VARIABLES
 #   PROJECTS   A space-separated list of project paths or identifiers for which Maven
@@ -38,6 +44,14 @@ fi
 #prog=$(basename $0)
 dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
+
+clean_workspace=false
+if [[ "${1:-}" == "--clean" ]]; then
+  clean_workspace=true
+  shift
+fi
+
+check_workspaces "${clean_workspace}"
 
 opts="${MAVEN_REPO_LOCAL_OPT}"
 

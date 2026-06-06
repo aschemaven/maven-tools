@@ -118,6 +118,83 @@ if [[ ! "${MAVEN_OPTS:-}" =~ maven.repo.local ]]; then
   MAVEN_REPO_LOCAL_OPT="-Dmaven.repo.local=${root}/.m2/repository"
 fi
 
+# List workspace pollution for a single project on stdout (one item per line,
+# path relative to the project directory).
+#
+# An item is considered pollution if it would trip Apache RAT or otherwise
+# leak into the build despite not being part of the project's source tree:
+#   - jqassistant/store/  (leftover from earlier central-mode jQA runs)
+#   - untracked root-level files that the project's own .gitignore does
+#     NOT exclude. Files matched by the project .gitignore (e.g. shade's
+#     dependency-reduced-pom.xml) are expected build outputs that
+#     maven-parent's RAT config already accepts -- they are not pollution.
+#     Files matched only by the *user's global* gitignore (e.g. .sdkmanrc)
+#     still count: RAT does not honor any gitignore so they trip license
+#     checks.
+#
+# target/ is excluded: clean verify will handle it; listing it would be noisy.
+list_workspace_pollution() {
+  local project_dir="$1"
+  [[ -d "${project_dir}/jqassistant/store" ]] && echo "jqassistant/store"
+  if git -C "${project_dir}" rev-parse --git-dir >/dev/null 2>&1; then
+    local candidates
+    candidates=$(git -C "${project_dir}" ls-files --others -z 2>/dev/null \
+      | tr '\0' '\n' \
+      | grep -v '/' \
+      | grep -vx 'target' \
+      || true)
+    [[ -z "${candidates}" ]] && return
+    while IFS= read -r f; do
+      [[ -z "${f}" ]] && continue
+      # check-ignore exits 0 if a gitignore rule matches; setting
+      # core.excludesFile=/dev/null disables the user's global gitignore,
+      # so only the project's own .gitignore counts. Matching files are
+      # expected build outputs and skipped.
+      if ! git -C "${project_dir}" \
+            -c core.excludesFile=/dev/null \
+            check-ignore -q "${f}" 2>/dev/null; then
+        echo "${f}"
+      fi
+    done <<< "${candidates}"
+  fi
+}
+
+# Pre-flight check across all PROJECTS. With do_clean="true", removes any
+# pollution found and prints a report. Otherwise prints the findings and
+# exits non-zero so the caller can fix things before kicking off a build.
+check_workspaces() {
+  local do_clean="$1"
+  local polluted=0
+  local report=""
+  for project in ${PROJECTS}; do
+    local project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
+    [[ ! -d "${project_dir}" ]] && continue
+    [[ ! -r "${project_dir}/pom.xml" ]] && continue
+    local items
+    items=$(list_workspace_pollution "${project_dir}")
+    [[ -z "${items}" ]] && continue
+    polluted=$((polluted + 1))
+    report+="  ${project}:"$'\n'
+    while IFS= read -r item; do
+      report+="    ${item}"$'\n'
+      if [[ "${do_clean}" == "true" ]]; then
+        /bin/rm -rf "${project_dir:?}/${item}"
+      fi
+    done <<< "${items}"
+  done
+  [[ ${polluted} -eq 0 ]] && return 0
+  if [[ "${do_clean}" == "true" ]]; then
+    echo "Cleaned workspace pollution in ${polluted} project(s):" >&2
+    printf '%s' "${report}" >&2
+  else
+    echo "ERROR: workspace pollution detected in ${polluted} project(s)." >&2
+    echo "       The following items would trip RAT or pollute the build:" >&2
+    printf '%s' "${report}" >&2
+    echo "       Re-run with '--clean' as the first argument to remove them." >&2
+    exit 1
+  fi
+}
+
 exec_mvn() {
   project=$1
   shift
