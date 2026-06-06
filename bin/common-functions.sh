@@ -257,8 +257,21 @@ exec_mvn() {
     ext=" (no extension)"
     ;;
   *)
-    mkdir -p "${project_dir}/.mvn"
-    ln -f "${root}/develocity"/*.xml "${project_dir}/.mvn"
+    if test "${USE_DEVELOCITY:-false}" = "true"; then
+      # Skip if the project has its own .mvn/extensions.xml that differs
+      # from our Develocity template -- overwriting it would corrupt
+      # tracked content (e.g. plugins/core/surefire ships a tracked but
+      # mostly-commented extensions.xml; Maven 4 core has build-cache
+      # extensions there).
+      own_ext="${project_dir}/.mvn/extensions.xml"
+      tmpl_ext="${root}/develocity/extensions.xml"
+      if [[ -f "${own_ext}" ]] && ! cmp -s "${own_ext}" "${tmpl_ext}"; then
+        ext=" (Develocity skipped: project has own .mvn/extensions.xml)"
+      else
+        mkdir -p "${project_dir}/.mvn"
+        ln -f "${root}/develocity"/*.xml "${project_dir}/.mvn"
+      fi
+    fi
     ;;
   esac
 
