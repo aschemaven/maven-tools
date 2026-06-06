@@ -109,6 +109,41 @@ select_mvn() {
 # root is used in other scripts, dir is injected by the caller
 root=$(readlink -f "${dir}/..")
 [[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat ${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list)"
+
+# Load default EXCLUDE_PROJECTS from exclude-projects.txt unless the caller
+# has explicitly set the variable (including to the empty string, which
+# disables exclusion entirely).
+if [[ -z "${EXCLUDE_PROJECTS+x}" ]]; then
+  if [[ -r "${root}/exclude-projects.txt" ]]; then
+    EXCLUDE_PROJECTS=$(grep -vE '^[[:space:]]*(#|$)' "${root}/exclude-projects.txt" | tr '\n' ' ')
+  else
+    EXCLUDE_PROJECTS=""
+  fi
+fi
+
+# Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
+# applies to both the default project.list and a user-supplied PROJECTS
+# value -- explicit override via EXCLUDE_PROJECTS="" disables filtering.
+if [[ -n "${EXCLUDE_PROJECTS// /}" ]]; then
+  excluded_list=""
+  filtered=""
+  for project in ${PROJECTS}; do
+    skip=false
+    for excl in ${EXCLUDE_PROJECTS}; do
+      [[ "${project}" == "${excl}" ]] && skip=true && break
+    done
+    if ${skip}; then
+      excluded_list+="${project} "
+    else
+      filtered+="${project} "
+    fi
+  done
+  if [[ -n "${excluded_list}" ]]; then
+    echo "Excluding project(s) via EXCLUDE_PROJECTS: ${excluded_list% }" >&2
+  fi
+  PROJECTS="${filtered% }"
+fi
+
 noof_projects=$(echo "${PROJECTS}" | wc -w | sed -e 's/ //g')
 counter=0
 
