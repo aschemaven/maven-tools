@@ -1,0 +1,14 @@
+# Projects whose builds are known to be intermittently flaky (e.g. due to
+# environment-sensitive integration tests, race conditions, or network
+# timing). Listed projects get FLAKY_RETRY_DEFAULT (default 2) automatic
+# retries when their build fails, even without --retry on the CLI.
+#
+# One project path per line (relative to ${MAVEN_PROJECTS_DIR}, default `maven`).
+# Lines starting with `#` and blank lines are ignored.
+#
+# Override at runtime by setting FLAKY_PROJECTS (space-separated) or
+# FLAKY_PROJECTS="" to disable per-project flaky handling.
+#
+# Document the actual cause of flakiness in ~/wrk/maven/maven-bugfixing/queue/
+# before adding a project here -- the retry list is not a place to hide
+# permanently broken projects.

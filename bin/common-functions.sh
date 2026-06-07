@@ -110,26 +110,35 @@ select_mvn() {
 root=$(readlink -f "${dir}/..")
 [[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat ${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list)"
 
+# Read non-comment, non-blank lines from a file as a space-separated list.
+# Tolerates files that only contain comments (grep returns 1) and missing
+# files without aborting the surrounding set -e / pipefail script.
+read_project_list_file() {
+  local file="$1"
+  [[ -r "${file}" ]] || { echo ""; return; }
+  grep -vE '^[[:space:]]*(#|$)' "${file}" 2>/dev/null | tr '\n' ' ' || true
+}
+
 # Load default EXCLUDE_PROJECTS from exclude-projects.txt unless the caller
 # has explicitly set the variable (including to the empty string, which
 # disables exclusion entirely).
 if [[ -z "${EXCLUDE_PROJECTS+x}" ]]; then
-  if [[ -r "${root}/exclude-projects.txt" ]]; then
-    EXCLUDE_PROJECTS=$(grep -vE '^[[:space:]]*(#|$)' "${root}/exclude-projects.txt" | tr '\n' ' ')
-  else
-    EXCLUDE_PROJECTS=""
-  fi
+  EXCLUDE_PROJECTS=$(read_project_list_file "${root}/exclude-projects.txt")
 fi
 
 # Load default DEVELOCITY_SKIP_PROJECTS from develocity-skip-projects.txt.
 # Same convention as EXCLUDE_PROJECTS: unset -> read file; empty string -> off.
 if [[ -z "${DEVELOCITY_SKIP_PROJECTS+x}" ]]; then
-  if [[ -r "${root}/develocity-skip-projects.txt" ]]; then
-    DEVELOCITY_SKIP_PROJECTS=$(grep -vE '^[[:space:]]*(#|$)' "${root}/develocity-skip-projects.txt" | tr '\n' ' ')
-  else
-    DEVELOCITY_SKIP_PROJECTS=""
-  fi
+  DEVELOCITY_SKIP_PROJECTS=$(read_project_list_file "${root}/develocity-skip-projects.txt")
 fi
+
+# Load default FLAKY_PROJECTS from flaky-projects.txt.
+# Same convention as above. FLAKY_RETRY_DEFAULT controls how many automatic
+# retries listed projects get when no --retry override is in effect.
+if [[ -z "${FLAKY_PROJECTS+x}" ]]; then
+  FLAKY_PROJECTS=$(read_project_list_file "${root}/flaky-projects.txt")
+fi
+: "${FLAKY_RETRY_DEFAULT:=2}"
 
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS
@@ -341,24 +350,59 @@ exec_mvn() {
       mvn_info="without wrapper"
     fi
   fi
+  # Decide retry budget. --retry on the CLI (RETRY_CLI) wins and applies
+  # to ALL projects; without it, projects listed in FLAKY_PROJECTS get
+  # FLAKY_RETRY_DEFAULT automatic retries; all others get 0.
+  local is_flaky=false
+  for fp in ${FLAKY_PROJECTS:-}; do
+    if [[ "${project}" == "${fp}" ]]; then
+      is_flaky=true
+      break
+    fi
+  done
+  local max_retries=0
+  if [[ -n "${RETRY_CLI:-}" ]]; then
+    max_retries="${RETRY_CLI}"
+  elif ${is_flaky}; then
+    max_retries="${FLAKY_RETRY_DEFAULT}"
+  fi
+
   logs="${root}/logs/${project}/${task}-$$-${counter}.log"
   echo -n "${project} (${counter}/${noof_projects}), a Maven project ${mvn_info}, build (logs: '${logs}') "
   set +e
-  (
-    cd "${project_dir}"
-    # shellcheck disable=SC2086
-    ${mvn} -B -s "${SETTINGS}" ${opts} ${goals} 2>&1
-  ) > "${logs}"
-  status="${?}"
+  local attempt=0
+  local current_logs
+  while :; do
+    if [[ ${attempt} -eq 0 ]]; then
+      current_logs="${logs}"
+    else
+      current_logs="${logs%.log}-retry${attempt}.log"
+    fi
+    (
+      cd "${project_dir}"
+      # shellcheck disable=SC2086
+      ${mvn} -B -s "${SETTINGS}" ${opts} ${goals} 2>&1
+    ) > "${current_logs}"
+    status="${?}"
+    [[ ${status} -eq 0 ]] && break
+    [[ ${attempt} -ge ${max_retries} ]] && break
+    attempt=$((attempt + 1))
+  done
+  local retry_tag=""
+  if [[ ${attempt} -eq 1 ]]; then
+    retry_tag=" after 1 retry"
+  elif [[ ${attempt} -gt 1 ]]; then
+    retry_tag=" after ${attempt} retries"
+  fi
   if test ${status} -ne 0; then
-    echo "failed${ext}"
-    test "${PREVIEW_LOGLINES:-0}" -gt 0 && tail -"${PREVIEW_LOGLINES}" "${logs}"
+    echo "failed${retry_tag}${ext}"
+    test "${PREVIEW_LOGLINES:-0}" -gt 0 && tail -"${PREVIEW_LOGLINES}" "${current_logs}"
     if eval "${FAIL_FAST:-false}"; then
       echo "Failing fast and current execution failed with status '${status}'"
       exit ${status}
     fi
   else
-    echo "succeeded${ext}"
+    echo "succeeded${retry_tag}${ext}"
   fi
   set -e
 }

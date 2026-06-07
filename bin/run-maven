@@ -9,7 +9,7 @@ fi
 # This script executes Maven goals for multiple projects with specific options and configurations.
 #
 # SYNOPSIS
-#   run-maven [--clean] [Maven goals...]
+#   run-maven [--clean] [--retry N] [Maven goals...]
 #
 # DESCRIPTION
 #   This script automates the execution of Maven goals for a list of projects defined
@@ -21,12 +21,17 @@ fi
 #   trip Apache RAT). By default it aborts if any is found. Pass --clean as the first
 #   argument to remove the pollution and continue.
 #
+#   --retry N applies to ALL failed projects this run (ad-hoc mode). Without --retry,
+#   projects listed in flaky-projects.txt / FLAKY_PROJECTS still get a default of 2
+#   automatic retries each.
+#
 #   The script reads common functions from the `common-functions.sh` file located in the
 #   same directory as the script itself.
 #
 # USAGE EXAMPLE
 #   run-maven clean install
 #   run-maven --clean clean install
+#   run-maven --retry 3 clean verify
 #
 # ENVIRONMENT VARIABLES
 #   PROJECTS   A space-separated list of project paths or identifiers for which Maven
@@ -46,10 +51,29 @@ dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
 
 clean_workspace=false
-if [[ "${1:-}" == "--clean" ]]; then
-  clean_workspace=true
-  shift
-fi
+retry_cli=""
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --clean)
+      clean_workspace=true
+      shift
+      ;;
+    --retry)
+      shift
+      retry_cli="${1:-}"
+      if [[ ! "${retry_cli}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --retry requires a non-negative integer argument" >&2
+        exit 2
+      fi
+      shift
+      ;;
+    *)
+      echo "ERROR: unknown option '${1}'" >&2
+      exit 2
+      ;;
+  esac
+done
+export RETRY_CLI="${retry_cli}"
 
 check_workspaces "${clean_workspace}"
 
