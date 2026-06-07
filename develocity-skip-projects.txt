@@ -1,0 +1,15 @@
+# Projects for which Develocity must be deactivated regardless of how
+# the extension was loaded (project, parent POM, SDKman pre-installed,
+# auto-injection env...). For listed projects, run-maven appends
+# -Ddevelocity.deactivate=true so the extension shuts down at startup.
+#
+# One project path per line (relative to ${MAVEN_PROJECTS_DIR}, default `maven`).
+# Lines starting with `#` and blank lines are ignored.
+#
+# Override at runtime by setting DEVELOCITY_SKIP_PROJECTS (space-separated)
+# or DEVELOCITY_SKIP_PROJECTS="" to disable per-project deactivation.
+
+# Surefire crashes the Develocity extension with
+# `junitPlatformArtifact is null` even when extensions.xml is empty --
+# the extension is pulled in elsewhere.
+plugins/core/surefire

@@ -121,6 +121,16 @@ if [[ -z "${EXCLUDE_PROJECTS+x}" ]]; then
   fi
 fi
 
+# Load default DEVELOCITY_SKIP_PROJECTS from develocity-skip-projects.txt.
+# Same convention as EXCLUDE_PROJECTS: unset -> read file; empty string -> off.
+if [[ -z "${DEVELOCITY_SKIP_PROJECTS+x}" ]]; then
+  if [[ -r "${root}/develocity-skip-projects.txt" ]]; then
+    DEVELOCITY_SKIP_PROJECTS=$(grep -vE '^[[:space:]]*(#|$)' "${root}/develocity-skip-projects.txt" | tr '\n' ' ')
+  else
+    DEVELOCITY_SKIP_PROJECTS=""
+  fi
+fi
+
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS
 # value -- explicit override via EXCLUDE_PROJECTS="" disables filtering.
@@ -274,6 +284,17 @@ exec_mvn() {
     fi
     ;;
   esac
+
+  # Per-project Develocity deactivation: append -Ddevelocity.deactivate=true
+  # for projects listed in DEVELOCITY_SKIP_PROJECTS. Works even if the
+  # extension is loaded transitively (parent POM, SDKman, auto-injection).
+  for skip_p in ${DEVELOCITY_SKIP_PROJECTS:-}; do
+    if [[ "${project}" == "${skip_p}" ]]; then
+      opts="${opts} -Ddevelocity.deactivate=true"
+      ext="${ext} (Develocity deactivated)"
+      break
+    fi
+  done
 
   mvn_info=""
   if test -r "${project_dir}/mvnw"; then
