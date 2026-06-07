@@ -99,3 +99,39 @@ set +e
   done
 } 2>&1 | tee "${overall_log}"
 set -e
+
+# Summary -- parsed from overall_log so it reflects the final emitted state
+# (the for-loop runs in a pipe subshell, so per-project state doesn't
+# survive into here). Appended to the overall log as well, so the log
+# self-contains the summary.
+{
+  total_succ=$(grep -cE "'\) succeeded" "${overall_log}" || true)
+  total_fail=$(grep -cE "'\) failed" "${overall_log}" || true)
+  succ_w_retry=$(grep -cE "'\) succeeded after [0-9]+ retr" "${overall_log}" || true)
+  fail_w_retry=$(grep -cE "'\) failed after [0-9]+ retr" "${overall_log}" || true)
+  non_maven=$(grep -cE 'is not a Maven project' "${overall_log}" || true)
+  total_built=$((total_succ + total_fail))
+  echo ""
+  echo "================ run-maven summary ================"
+  echo "Goals:     ${goals}"
+  echo "Projects:  ${total_built} built, ${non_maven} non-Maven skipped"
+  echo "Succeeded: ${total_succ}  (${succ_w_retry} after retry)"
+  echo "Failed:    ${total_fail}  (${fail_w_retry} after retry)"
+  if [[ ${total_fail} -gt 0 ]]; then
+    echo ""
+    echo "Failures:"
+    # Subshell with relaxed flags so grep's non-match exit (1) doesn't
+    # bail us out via pipefail/set -e.
+    (
+      set +e +o pipefail
+      grep -E "'\) failed" "${overall_log}" | while IFS= read -r line; do
+        proj=$(printf '%s' "${line}" | sed -E 's/^([^ ]+) .*/\1/')
+        logpath=$(printf '%s' "${line}" | sed -E "s/.*\(logs: '([^']+)'\).*/\1/")
+        retry_tag=$(printf '%s' "${line}" | grep -oE 'after [0-9]+ retr(y|ies)' | head -1)
+        [[ -n "${retry_tag}" ]] && retry_tag=" (${retry_tag})"
+        printf '  %s%s\n      %s\n' "${proj}" "${retry_tag}" "${logpath}"
+      done
+    )
+  fi
+  echo "==================================================="
+} 2>&1 | tee -a "${overall_log}"
