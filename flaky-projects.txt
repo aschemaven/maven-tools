@@ -18,3 +18,10 @@
 # expected HTTP-proxy auth error. Environment-sensitive DNS/HTTP behavior.
 # See ~/wrk/maven/maven-bugfixing/queue/core-resolver-apache-transport-lokal-2026-06-07.md
 core/resolver
+
+# wagon-providers HTTP/WebDAV redirect tests intermittently fail with
+# "TransferFailed transfer failed for http://localhost:<port>/resource";
+# different test fails each run (Lightweight, WebDav, ...), classic
+# loopback-timing flakiness on macOS.
+# See ~/wrk/maven/maven-bugfixing/queue/misc-wagon-http-tests-lokal-2026-06-07.adoc
+misc/wagon
