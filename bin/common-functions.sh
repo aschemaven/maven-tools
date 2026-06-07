@@ -274,6 +274,24 @@ exec_mvn() {
 
   test ! -d "${project_dir}" && echo "${project} does not exist" >&2 && return
   mkdir -p "${root}/logs/${project}"
+
+  # When 'clean' is part of the requested goals, recursively wipe
+  # build-output target/ directories before invoking Maven. Apache
+  # Maven aggregator POMs (inherited from maven-parent) run
+  # apache-rat-plugin in the process-resources phase, BEFORE child
+  # modules get their own `clean`. Stale target/ content from previous
+  # local builds then trips RAT in the aggregator. Upstream CI doesn't
+  # see this because fresh runners start with empty workspaces.
+  #
+  # Exclude target/ directories under */src/* -- several Maven plugin
+  # projects ship mock-project fixtures (with their own target/) under
+  # src/test/resources/ that the tests rely on. Wiping those breaks
+  # maven-install-plugin, maven-rar-plugin, maven-clean-plugin, and
+  # friends.
+  if [[ " ${goals} " == *" clean "* ]]; then
+    find "${project_dir}" -type d -name target -not -path '*/src/*' -prune -exec /bin/rm -rf {} + 2>/dev/null || true
+  fi
+
   ext=""
   case "${project}" in
   "core/maven")
