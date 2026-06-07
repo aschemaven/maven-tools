@@ -12,3 +12,9 @@
 # Document the actual cause of flakiness in ~/wrk/maven/maven-bugfixing/queue/
 # before adding a project here -- the retry list is not a place to hide
 # permanently broken projects.
+
+# ApacheTransporterTest.testGet_ProxyAuthenticated occasionally fails locally
+# with "NoHttpResponse bad.localhost:1 failed to respond" instead of the
+# expected HTTP-proxy auth error. Environment-sensitive DNS/HTTP behavior.
+# See ~/wrk/maven/maven-bugfixing/queue/core-resolver-apache-transport-lokal-2026-06-07.md
+core/resolver

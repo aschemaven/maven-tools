@@ -5,11 +5,6 @@
 # Override at runtime by setting EXCLUDE_PROJECTS (space-separated) or
 # EXCLUDE_PROJECTS="" to disable exclusion entirely.
 
-# Aggregator POMs that scan child-module target/ during verify and fail RAT.
-core/maven
-core/maven-4.0.x
-core/resolver
-
 # Sandbox / demo projects that don't build standalone.
 studies/consumer-pom
 studies/maven-eventsound-extension
