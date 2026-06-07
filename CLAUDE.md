@@ -80,6 +80,7 @@ USE_DEVELOCITY=true ./bin/run-maven clean install
 | `MAVEN_PROJECTS_DIR` | Directory containing Maven project checkouts | `maven` |
 | `PROJECTS` | Space-separated list of project paths | Contents of `${MAVEN_PROJECTS_DIR}/.repo/project.list` |
 | `USE_DEVELOCITY` | Enable Develocity build scans | `false` |
+| `MAVEN_LRM_SPLIT` | Enable Maven Resolver Enhanced LRM split layout (`installed/cached` x `releases/snapshots`) under `${maven.repo.local}` | `true` |
 | `FAIL_FAST` | Exit on first build failure | `false` |
 | `PREVIEW_LOGLINES` | Lines of log to show on failure | `0` |
 | `SETTINGS` | Maven settings file path | `${PWD}/settings.xml` |

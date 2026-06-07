@@ -172,6 +172,27 @@ if [[ ! "${MAVEN_OPTS:-}" =~ maven.repo.local ]]; then
   MAVEN_REPO_LOCAL_OPT="-Dmaven.repo.local=${root}/.m2/repository"
 fi
 
+# Enable Maven Resolver's Enhanced LRM split mode (resolver 1.9+ / 2.x).
+# Layout: ${maven.repo.local}/{installed,cached}/{releases,snapshots}/
+# Lets us purge installed/snapshots/ cleanly without nuking the cached
+# Maven Central artifacts, and makes the kind of cross-pollution that
+# caused the mvnd/resolver-2.0.18 mystery directly visible in the layout
+# (a locally-built SNAPSHOT lives in installed/snapshots/, a downloaded
+# Central artifact in cached/releases/ -- never mixed).
+#
+# Properties go into MAVEN_OPTS (not just our own mvn CLI) so child
+# Maven processes spawned by maven-invoker-plugin (in integration
+# tests of core/3.x/its-3, core/3.x/resolver-1, ...) inherit them.
+# JVM system properties don't propagate to child Java processes;
+# env vars do, and MAVEN_OPTS is what every mvn shell launcher reads.
+#
+# Set MAVEN_LRM_SPLIT=false to opt out.
+if [[ "${MAVEN_LRM_SPLIT:-true}" == "true" ]]; then
+  if [[ ! "${MAVEN_OPTS:-}" =~ aether\.enhancedLocalRepository\.split ]]; then
+    export MAVEN_OPTS="${MAVEN_OPTS:-} -Daether.enhancedLocalRepository.split=true -Daether.enhancedLocalRepository.splitLocal=true -Daether.enhancedLocalRepository.splitRemote=true"
+  fi
+fi
+
 # List workspace pollution for a single project on stdout (one item per line,
 # path relative to the project directory).
 #
