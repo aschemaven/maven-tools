@@ -176,11 +176,24 @@ fi
 #     Files matched only by the *user's global* gitignore (e.g. .sdkmanrc)
 #     still count: RAT does not honor any gitignore so they trip license
 #     checks.
+#   - .mvn/develocity.xml and .mvn/extensions.xml that are byte-identical
+#     to our Develocity template AND USE_DEVELOCITY is not currently active
+#     (stale hardlinks from earlier USE_DEVELOCITY=true runs). Project-owned
+#     .mvn/extensions.xml stays untouched.
 #
 # target/ is excluded: clean verify will handle it; listing it would be noisy.
 list_workspace_pollution() {
   local project_dir="$1"
   [[ -d "${project_dir}/jqassistant/store" ]] && echo "jqassistant/store"
+  if [[ "${USE_DEVELOCITY:-false}" != "true" ]]; then
+    for f in develocity.xml extensions.xml; do
+      local own="${project_dir}/.mvn/${f}"
+      local tmpl="${root}/develocity/${f}"
+      if [[ -f "${own}" && -f "${tmpl}" ]] && cmp -s "${own}" "${tmpl}"; then
+        echo ".mvn/${f}"
+      fi
+    done
+  fi
   if git -C "${project_dir}" rev-parse --git-dir >/dev/null 2>&1; then
     local candidates
     candidates=$(git -C "${project_dir}" ls-files --others -z 2>/dev/null \
