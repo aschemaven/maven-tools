@@ -299,15 +299,20 @@ check_workspaces() {
 }
 
 exec_mvn() {
-  project=$1
+  # All positional args go into LOCAL variables. Without `local`, opts
+  # in particular accumulates per-project flags (-Daether..., -Dmaven.
+  # repo.local=...isolated/<slug>) across loop iterations: the global
+  # opts the caller still references gets mutated by each call, so
+  # project N inherits the flags of projects 1..N-1.
+  local project=$1
   shift
-  task=$1
+  local task=$1
   shift
-  counter=$1
+  local counter=$1
   shift
-  opts=$1
+  local opts=$1
   shift
-  goals=${*}
+  local goals=${*}
 
   # Full path to project directory (under MAVEN_PROJECTS_DIR)
   project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
