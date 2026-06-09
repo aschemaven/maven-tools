@@ -25,3 +25,15 @@ core/resolver
 # loopback-timing flakiness on macOS.
 # See ~/wrk/maven/maven-bugfixing/queue/misc-wagon-http-tests-lokal-2026-06-07.adoc
 misc/wagon
+
+# Resolver 1.x: HttpTransporterTest.testPeekRedirect (and family) fail
+# intermittently with "NoHttpResponse localhost:<port> failed to respond".
+# Same environment-sensitive HTTP-loopback flakiness as core/resolver
+# (resolver 2.x).
+core/3.x/resolver-1
+
+# misc/indexer (indexer-reader): maven-bundle-plugin:6.0.2 sometimes
+# throws ExceptionInInitializerError when shading. Passes on retry --
+# looks like a JDK 21+ / classloader timing quirk. Preventively listed
+# after observing one flaky pass on 2026-06-08; remove when stable.
+misc/indexer
