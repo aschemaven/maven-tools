@@ -1,0 +1,21 @@
+# Projects that need the Enhanced LRM split layout disabled
+# (-Daether.enhancedLocalRepository.split=false) because their tests
+# are hard-coded to the legacy flat layout under ${maven.repo.local}.
+#
+# Listed projects also get an isolated local Maven repository
+# automatically (same mechanism as ISOLATED_M2_PROJECTS) so the
+# resulting flat-layout artefacts do not pollute the shared M2_REPO.
+# Putting a project on this list implies isolation; you do NOT have
+# to add it to isolated-m2-projects.txt as well.
+#
+# One project path per line (relative to ${MAVEN_PROJECTS_DIR}).
+# Comments and blank lines are ignored. Override at runtime with the
+# LRM_SPLIT_SKIP_PROJECTS env var; set to empty string to disable.
+
+# plexus-compiler's AspectJCompilerTest checks for commons-lang at
+# ${maven.repo.local}/commons-lang/commons-lang/2.6/commons-lang-2.6.jar
+# (flat layout). With Enhanced LRM split active the jar lives under
+# cached/releases/commons-lang/... and the test prerequisite check
+# fails. Disable split for this project; auto-isolation contains the
+# flat-layout pollution to .m2-isolated/plexus--components--compiler/.
+plexus/components/compiler

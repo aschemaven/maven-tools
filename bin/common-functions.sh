@@ -148,6 +148,13 @@ if [[ -z "${ISOLATED_M2_PROJECTS+x}" ]]; then
   ISOLATED_M2_PROJECTS=$(read_project_list_file "${root}/isolated-m2-projects.txt")
 fi
 
+# Load default LRM_SPLIT_SKIP_PROJECTS from lrm-split-skip-projects.txt.
+# Projects on this list get -Daether.enhancedLocalRepository.split=false
+# AND auto-isolation (so their flat-layout artefacts stay contained).
+if [[ -z "${LRM_SPLIT_SKIP_PROJECTS+x}" ]]; then
+  LRM_SPLIT_SKIP_PROJECTS=$(read_project_list_file "${root}/lrm-split-skip-projects.txt")
+fi
+
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS
 # value -- explicit override via EXCLUDE_PROJECTS="" disables filtering.
@@ -365,20 +372,43 @@ exec_mvn() {
     fi
   done
 
-  # Per-project isolated local Maven repository: for projects whose
-  # IT infrastructures spawn fresh Maven / daemon processes that
-  # bypass MAVEN_OPTS and pollute the shared M2_REPO with flat-layout
-  # artifacts (mvnd, Maven integration testing, ...). CLI
-  # -Dmaven.repo.local overrides whatever MAVEN_OPTS configured.
-  for isolated_p in ${ISOLATED_M2_PROJECTS:-}; do
-    if [[ "${project}" == "${isolated_p}" ]]; then
-      local iso_path="${root}/.m2-isolated/${project//\//--}"
-      mkdir -p "${iso_path}"
-      opts="${opts} -Dmaven.repo.local=${iso_path}"
-      ext="${ext} (isolated M2)"
+  # Per-project LRM split-skip: some projects have tests hard-coded to
+  # the flat local-repo layout (e.g. plexus/components/compiler's
+  # AspectJCompilerTest asserts on ${maven.repo.local}/commons-lang/...).
+  # Disable Enhanced LRM split via CLI -D (overrides the MAVEN_OPTS
+  # exported true). Force auto-isolation so the resulting flat-layout
+  # artefacts do not pollute the shared M2_REPO.
+  local force_isolation=false
+  for split_skip_p in ${LRM_SPLIT_SKIP_PROJECTS:-}; do
+    if [[ "${project}" == "${split_skip_p}" ]]; then
+      opts="${opts} -Daether.enhancedLocalRepository.split=false"
+      ext="${ext} (LRM split disabled)"
+      force_isolation=true
       break
     fi
   done
+
+  # Per-project isolated local Maven repository: for projects whose
+  # IT infrastructures spawn fresh Maven / daemon processes that
+  # bypass MAVEN_OPTS and pollute the shared M2_REPO with flat-layout
+  # artifacts (mvnd, Maven integration testing, ...), and implicitly
+  # for any project on the LRM split-skip list above. CLI
+  # -Dmaven.repo.local overrides whatever MAVEN_OPTS configured.
+  local is_isolated=${force_isolation}
+  if ! ${is_isolated}; then
+    for isolated_p in ${ISOLATED_M2_PROJECTS:-}; do
+      if [[ "${project}" == "${isolated_p}" ]]; then
+        is_isolated=true
+        break
+      fi
+    done
+  fi
+  if ${is_isolated}; then
+    local iso_path="${root}/.m2-isolated/${project//\//--}"
+    mkdir -p "${iso_path}"
+    opts="${opts} -Dmaven.repo.local=${iso_path}"
+    ext="${ext} (isolated M2)"
+  fi
 
   mvn_info=""
   if test -r "${project_dir}/mvnw"; then
