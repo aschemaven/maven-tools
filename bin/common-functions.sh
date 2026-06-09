@@ -140,6 +140,14 @@ if [[ -z "${FLAKY_PROJECTS+x}" ]]; then
 fi
 : "${FLAKY_RETRY_DEFAULT:=2}"
 
+# Load default ISOLATED_M2_PROJECTS from isolated-m2-projects.txt.
+# Projects on this list get a dedicated local Maven repository
+# (${root}/.m2-isolated/<slug>/) instead of the shared M2_REPO,
+# isolating their fork-happy IT infrastructures.
+if [[ -z "${ISOLATED_M2_PROJECTS+x}" ]]; then
+  ISOLATED_M2_PROJECTS=$(read_project_list_file "${root}/isolated-m2-projects.txt")
+fi
+
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS
 # value -- explicit override via EXCLUDE_PROJECTS="" disables filtering.
@@ -353,6 +361,21 @@ exec_mvn() {
     if [[ "${project}" == "${skip_p}" ]]; then
       opts="${opts} -Ddevelocity.deactivate=true"
       ext="${ext} (Develocity deactivated)"
+      break
+    fi
+  done
+
+  # Per-project isolated local Maven repository: for projects whose
+  # IT infrastructures spawn fresh Maven / daemon processes that
+  # bypass MAVEN_OPTS and pollute the shared M2_REPO with flat-layout
+  # artifacts (mvnd, Maven integration testing, ...). CLI
+  # -Dmaven.repo.local overrides whatever MAVEN_OPTS configured.
+  for isolated_p in ${ISOLATED_M2_PROJECTS:-}; do
+    if [[ "${project}" == "${isolated_p}" ]]; then
+      local iso_path="${root}/.m2-isolated/${project//\//--}"
+      mkdir -p "${iso_path}"
+      opts="${opts} -Dmaven.repo.local=${iso_path}"
+      ext="${ext} (isolated M2)"
       break
     fi
   done

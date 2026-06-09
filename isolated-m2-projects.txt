@@ -1,0 +1,33 @@
+# Projects that get their own dedicated local Maven repository
+# (${root}/.m2-isolated/<slug>/) instead of the shared ${M2_REPO}.
+#
+# Why: their integration-test infrastructure spawns sub-Maven / daemon
+# processes that ignore MAVEN_OPTS and write artifacts in legacy flat
+# layout next to our Enhanced LRM split layout. An isolated repo
+# contains the pollution and keeps the shared M2 clean.
+#
+# Trade-off: each isolated project re-downloads its own copy of any
+# transitive deps from Maven Central (~few hundred MB per project).
+# Worth it for stable trouble-makers; do NOT add projects whose
+# installed SNAPSHOTs are required by other reactor projects (e.g.
+# core/maven, core/resolver -- their artifacts must reach the shared
+# M2 so downstream plugins can resolve them).
+#
+# One project path per line (relative to ${MAVEN_PROJECTS_DIR}).
+# Comments and blank lines are ignored. Override at runtime with the
+# ISOLATED_M2_PROJECTS env var; set to empty string to disable.
+
+# mvnd's InvokerTest spawns the daemon, which runs its own Maven
+# invocations and bypasses our split-layout MAVEN_OPTS.
+core/3.x/mvnd-1
+core/mvnd
+
+# Maven Integration Testing runs full forked Maven builds against test
+# poms via maven-invoker-plugin. Fresh JVMs, fresh classpaths -- our
+# system properties don't reach them.
+core/3.x/its-3
+
+# Maven Resolver tests spin up embedded HTTP servers and exercise the
+# resolver against them; cleaner to isolate the ephemeral state.
+core/3.x/resolver-1
+core/resolver
