@@ -31,3 +31,9 @@ core/3.x/its-3
 # resolver against them; cleaner to isolate the ephemeral state.
 core/3.x/resolver-1
 core/resolver
+
+# maven-build-cache-extension ITs (e.g. mvb-mvn4-rc5-skinny-wars-
+# timestamp-rrf) install sample artefacts via forked Maven invocations
+# that ignore our split-layout MAVEN_OPTS, leaking flat-layout test
+# artefacts into the shared M2_REPO.
+core/build-cache
