@@ -111,12 +111,30 @@ root=$(readlink -f "${dir}/..")
 [[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat ${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list)"
 
 # Read non-comment, non-blank lines from a file as a space-separated list.
+# Only the FIRST whitespace-separated token of each line is returned, so
+# files that carry optional per-line parameters (e.g. flaky-projects.txt:
+# "<project> [retries]") still produce a clean project-name list.
 # Tolerates files that only contain comments (grep returns 1) and missing
 # files without aborting the surrounding set -e / pipefail script.
 read_project_list_file() {
   local file="$1"
   [[ -r "${file}" ]] || { echo ""; return; }
-  grep -vE '^[[:space:]]*(#|$)' "${file}" 2>/dev/null | tr '\n' ' ' || true
+  grep -vE '^[[:space:]]*(#|$)' "${file}" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true
+}
+
+# Look up the per-project retry count from flaky-projects.txt. Lines may
+# carry an optional second field (the override), e.g. "misc/wagon 3".
+# Falls back to FLAKY_RETRY_DEFAULT when no override is set or the file
+# is missing.
+get_flaky_retry_count() {
+  local project="$1"
+  local count="${FLAKY_RETRY_DEFAULT}"
+  local file="${root}/flaky-projects.txt"
+  [[ -r "${file}" ]] || { echo "${count}"; return; }
+  local n
+  n=$(awk -v p="${project}" '$1 == p {print $2; exit}' "${file}" 2>/dev/null)
+  [[ "${n}" =~ ^[0-9]+$ ]] && count="${n}"
+  echo "${count}"
 }
 
 # Load default EXCLUDE_PROJECTS from exclude-projects.txt unless the caller
@@ -430,8 +448,9 @@ exec_mvn() {
     fi
   fi
   # Decide retry budget. --retry on the CLI (RETRY_CLI) wins and applies
-  # to ALL projects; without it, projects listed in FLAKY_PROJECTS get
-  # FLAKY_RETRY_DEFAULT automatic retries; all others get 0.
+  # to ALL projects; without it, projects listed in FLAKY_PROJECTS get a
+  # per-project override (second field in flaky-projects.txt) or
+  # FLAKY_RETRY_DEFAULT; all others get 0.
   local is_flaky=false
   for fp in ${FLAKY_PROJECTS:-}; do
     if [[ "${project}" == "${fp}" ]]; then
@@ -443,7 +462,7 @@ exec_mvn() {
   if [[ -n "${RETRY_CLI:-}" ]]; then
     max_retries="${RETRY_CLI}"
   elif ${is_flaky}; then
-    max_retries="${FLAKY_RETRY_DEFAULT}"
+    max_retries=$(get_flaky_retry_count "${project}")
   fi
 
   logs="${root}/logs/${project}/${task}-$$-${counter}.log"

@@ -9,6 +9,11 @@
 # Override at runtime by setting FLAKY_PROJECTS (space-separated) or
 # FLAKY_PROJECTS="" to disable per-project flaky handling.
 #
+# Lines may carry an optional second field with a per-project retry count
+# override (overrides FLAKY_RETRY_DEFAULT for that project only):
+#   <project>            -> use FLAKY_RETRY_DEFAULT (currently 2)
+#   <project> <N>        -> use N retries for this project only
+#
 # Document the actual cause of flakiness in ~/wrk/maven/maven-bugfixing/queue/
 # before adding a project here -- the retry list is not a place to hide
 # permanently broken projects.
@@ -22,9 +27,11 @@ core/resolver
 # wagon-providers HTTP/WebDAV redirect tests intermittently fail with
 # "TransferFailed transfer failed for http://localhost:<port>/resource";
 # different test fails each run (Lightweight, WebDav, ...), classic
-# loopback-timing flakiness on macOS.
+# loopback-timing flakiness on macOS. Three retries because two
+# consecutive runs both burned through the default budget before
+# stabilising.
 # See ~/wrk/maven/maven-bugfixing/queue/misc-wagon-http-tests-lokal-2026-06-07.adoc
-misc/wagon
+misc/wagon 3
 
 # Resolver 1.x: HttpTransporterTest.testPeekRedirect (and family) fail
 # intermittently with "NoHttpResponse localhost:<port> failed to respond".
