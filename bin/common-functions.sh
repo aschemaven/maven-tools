@@ -137,6 +137,16 @@ get_flaky_retry_count() {
   echo "${count}"
 }
 
+# Look up per-project extra Maven CLI arguments from extra-mvn-args.txt.
+# Format per line: "<project> <arg1> [<arg2> ...]". Returns the rest of
+# the line (everything after the project name) or an empty string.
+get_extra_mvn_args() {
+  local project="$1"
+  local file="${root}/extra-mvn-args.txt"
+  [[ -r "${file}" ]] || { echo ""; return; }
+  awk -v p="${project}" '$1 == p {$1=""; sub(/^[[:space:]]+/, ""); print; exit}' "${file}" 2>/dev/null
+}
+
 # Load default EXCLUDE_PROJECTS from exclude-projects.txt unless the caller
 # has explicitly set the variable (including to the empty string, which
 # disables exclusion entirely).
@@ -431,6 +441,15 @@ exec_mvn() {
     mkdir -p "${iso_path}"
     opts="${opts} -Dmaven.repo.local=${iso_path}"
     ext="${ext} (isolated M2)"
+  fi
+
+  # Per-project extra Maven CLI arguments from extra-mvn-args.txt.
+  # Catch-all for one-off flags like -Dsurefire.timeout=600 for projects
+  # whose forked test JVMs need a leash.
+  local extra_args
+  extra_args=$(get_extra_mvn_args "${project}")
+  if [[ -n "${extra_args}" ]]; then
+    opts="${opts} ${extra_args}"
   fi
 
   mvn_info=""

@@ -1,0 +1,16 @@
+# Per-project extra Maven CLI arguments appended to the mvn invocation.
+# Format: <project> <arg1> [<arg2> ...]
+# Comments starting with `#` and blank lines are ignored.
+#
+# Use sparingly -- this is the catch-all hatch for one-off Surefire,
+# Failsafe, or plugin-specific flags that we don't want global. Prefer
+# the dedicated per-project lists (isolated-m2-projects.txt,
+# lrm-split-skip-projects.txt, develocity-skip-projects.txt,
+# flaky-projects.txt) for their respective concerns.
+
+# wagon-providers tests occasionally hang in surefire's forked JVM
+# (HttpsWagon TLS handshake / HTTP keep-alive corner cases on macOS
+# loopback). Cap each surefire fork at 10 minutes so a hang turns into
+# a test failure (which the retry mechanism can then ride over) rather
+# than an infinite stall that requires manual kill -9.
+misc/wagon -Dsurefire.timeout=600
