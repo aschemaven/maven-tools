@@ -1,0 +1,96 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# variant-setup - materialise the self-contained directory for one or more
+# compat-matrix variants under variants/<name>/.
+#
+# SYNOPSIS
+#   variant-setup [variant ...]
+#
+# DESCRIPTION
+#   For each named variant (default: all declared in variants.txt) this creates
+#   variants/<name>/ with:
+#     - maven        -> symlink to the SDKman Maven home for a STABLE version,
+#                       so variants/<name>/maven/bin/mvn resolves. SNAPSHOT /
+#                       branch-built distros are NOT created here (they need a
+#                       separate prepare/build step); a warning is printed.
+#     - settings.xml -> copied from the shared template (top-level settings.xml)
+#                       if the variant does not already ship its own.
+#     - repository/, logs/, cells/  (empty dirs, ready for runs)
+#
+#   The variant's Maven binary, settings, local repo, logs and JDK are then
+#   honoured by run-maven via VARIANT=<name> (see common-functions.sh).
+#
+#   Idempotent: re-running refreshes the symlink and missing dirs without
+#   clobbering an existing variant-specific settings.xml.
+
+dir=$(dirname "${0}")
+source "${dir}/common-functions.sh"
+
+# SDKman Maven home for a given version, or empty string if not installed.
+sdkman_maven_home() {
+  local version="$1"
+  local home="${HOME}/.sdkman/candidates/maven/${version}"
+  [[ -x "${home}/bin/mvn" ]] && echo "${home}"
+}
+
+# Which variants to set up: CLI args, else everything in variants.txt.
+# (Portable array fill -- macOS /bin/bash is 3.2 and has no mapfile.)
+variants=("${@}")
+if [[ ${#variants[@]} -eq 0 ]]; then
+  while IFS= read -r _name; do
+    [[ -n "${_name}" ]] && variants+=("${_name}")
+  done < <(grep -vE '^[[:space:]]*(#|$)' "${root}/variants.txt" 2>/dev/null | awk '{print $1}')
+fi
+
+if [[ ${#variants[@]} -eq 0 ]]; then
+  echo "No variants to set up (variants.txt empty or missing)." >&2
+  exit 1
+fi
+
+for name in "${variants[@]}"; do
+  if ! variant_exists "${name}"; then
+    echo "SKIP ${name}: not declared in variants.txt" >&2
+    continue
+  fi
+
+  v_root="$(variant_root "${name}")"
+  version="$(variant_field "${name}" 2)"
+  branch="$(variant_field "${name}" 4)"
+  jdk="$(variant_jdk "${name}")"
+
+  mkdir -p "${v_root}/repository" "${v_root}/logs" "${v_root}/cells"
+
+  # --- Maven binary -------------------------------------------------------
+  # Stable, installed version -> symlink. Otherwise (SNAPSHOT / branch distro)
+  # leave it to a future prepare step and warn.
+  home="$(sdkman_maven_home "${version}")"
+  if [[ -n "${home}" ]]; then
+    ln -sfn "${home}" "${v_root}/maven"
+    mvn_note="maven -> ${home}"
+  elif [[ -x "${v_root}/maven/bin/mvn" ]]; then
+    mvn_note="maven (already present, kept)"
+  else
+    if [[ -n "${branch}" ]]; then
+      mvn_note="NO maven: branch '${branch}' distro must be built into ${v_root}/maven (prepare step, TODO)"
+    else
+      mvn_note="NO maven: version ${version} not installed in SDKman; build/install it or it will fall back to system mvn"
+    fi
+  fi
+
+  # --- settings.xml -------------------------------------------------------
+  if [[ -e "${v_root}/settings.xml" ]]; then
+    settings_note="settings.xml (kept)"
+  elif [[ -r "${root}/settings.xml" ]]; then
+    cp "${root}/settings.xml" "${v_root}/settings.xml"
+    settings_note="settings.xml (copied from template)"
+  else
+    settings_note="NO settings.xml (template ${root}/settings.xml missing)"
+  fi
+
+  echo "Variant '${name}': version=${version} jdk=${jdk:-default} branch=${branch:-<pinned>}"
+  echo "  ${mvn_note}"
+  echo "  ${settings_note}"
+  echo "  dirs: repository/ logs/ cells/"
+done

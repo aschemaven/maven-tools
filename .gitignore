@@ -8,3 +8,8 @@ jqassistant/store*
 logs/*
 *.log
 target/
+# Compat-matrix: machine-local variant trees + throwaway test checkouts
+# (variants.txt the descriptor stays tracked; the variants/ dir does not)
+tmp/
+variants/
+reports/

@@ -1,0 +1,40 @@
+# Compat-matrix variants.
+#
+# A "variant" is one column of the compatibility matrix: a self-contained
+# bundle of a Maven binary, its own settings.xml and local repository, an
+# optional JDK and an optional source branch. Everything a variant produces
+# lives under variants/<name>/ (binary, settings.xml, repository/, logs/,
+# cells/, worktrees/) so it can be disposed of with a single `rm -rf` without
+# touching the normal maven-tools state (.m2/, .m2-isolated/, logs/).
+#
+# Format (whitespace-separated columns):
+#   <name>  <mvn-version>  <jdk>  <branch>
+#
+#   name         variant id; used as the directory variants/<name>/ and as
+#                the VARIANT=<name> selector for run-maven.
+#   mvn-version  Maven version. Resolved to a binary by, in order:
+#                  1. variant-local   variants/<name>/maven/bin/mvn
+#                     (symlink to SDKman for stable, or a distro built from a
+#                      branch for SNAPSHOT / 4.x lines)
+#                  2. find_mvn_by_version (SDKman / GH tool-cache / MAVEN_HOMES)
+#   jdk          JDK major version (default 21). "-" = use default.
+#   branch       source branch for the components under test. "-" = the
+#                manifest-pinned line (shared maven/ checkout). A real branch
+#                gets a worktree under variants/<name>/worktrees/.
+#
+# Lines starting with # and blank lines are ignored. "-" means "unset" for the
+# optional jdk/branch columns.
+
+# --- stable variants (build-free: binary is a symlink to an installed SDKman
+#     Maven, so these are usable immediately) ---------------------------------
+# Keep these at the LATEST patch of each line (bump as new releases land;
+# a future 3.10.x line would get its own variant row).
+m3-9           3.9.16           21   -
+m4-rc5         4.0.0-rc-5       21   -
+
+# --- locally-built SNAPSHOT distros (need a `prepare` build first; the binary
+#     is built from the branch into variants/<name>/maven) ---------------------
+# m4-snapshot  4.0.0-SNAPSHOT   21   -
+
+# --- 4.x-native lines (Deliverable 3): carry a branch -> worktree -------------
+# m4-native-jar  <pinned>       21   master

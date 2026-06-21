@@ -1,0 +1,119 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# run-compat-matrix - build every (project, variant) cell and record a result.
+#
+# SYNOPSIS
+#   run-compat-matrix
+#
+# DESCRIPTION
+#   Loops over VARIANTS x PROJECTS, running the VARIANT-aware exec_mvn for each
+#   cell (so each variant uses its own Maven binary, settings.xml, isolated
+#   local repo and JDK -- see common-functions.sh). For every cell it writes a
+#   result file with provenance to
+#       variants/<variant>/cells/<project>.json
+#   The human-readable matrix is rendered separately by bin/compat-render.
+#
+# ENVIRONMENT
+#   VARIANTS       Space-separated variant names. Default: all of variants.txt.
+#   PROJECTS       Space-separated project paths. Default: project.list (minus
+#                  exclude-projects.txt), as for run-maven.
+#   MATRIX_GOALS   Maven goals per cell. Default: "-Prun-its clean verify".
+#   MAVEN_PROJECTS_DIR, MAVEN_LRM_SPLIT, flaky/isolated lists: as for run-maven.
+#
+#   Cells are independent; result classification mirrors the upstream matrix:
+#     BUILD SUCCESS -> ok (:white_check_mark:)
+#     BUILD FAILURE -> fail (:x:)
+#     otherwise     -> warn (:warning:)
+
+dir=$(dirname "${0}")
+source "${dir}/common-functions.sh"
+
+: "${MATRIX_GOALS:=-Prun-its clean verify}"
+
+# Variants to run. (Portable: macOS /bin/bash 3.2 has no mapfile.)
+if [[ -n "${VARIANTS:-}" ]]; then
+  read -r -a matrix_variants <<< "${VARIANTS}"
+else
+  matrix_variants=()
+  while IFS= read -r _name; do
+    [[ -n "${_name}" ]] && matrix_variants+=("${_name}")
+  done < <(grep -vE '^[[:space:]]*(#|$)' "${root}/variants.txt" 2>/dev/null | awk '{print $1}')
+fi
+
+# Projects: PROJECTS is already resolved (env or project.list, minus excludes)
+# by common-functions.sh.
+read -r -a matrix_projects <<< "${PROJECTS}"
+
+host=$(hostname -s 2>/dev/null || hostname || echo unknown)
+opts="${MAVEN_REPO_LOCAL_OPT}"
+task="${MATRIX_GOALS// /-}"
+
+total=$(( ${#matrix_variants[@]} * ${#matrix_projects[@]} ))
+# exec_mvn prints "(counter/noof_projects)"; make that reflect the full matrix.
+noof_projects="${total}"
+cell=0
+
+# Classify a Maven build log -> ok|fail|warn (mirrors the upstream matrix).
+classify_log() {
+  local log="$1"
+  [[ -r "${log}" ]] || { echo warn; return; }
+  if grep -q "BUILD SUCCESS" "${log}"; then
+    echo ok
+  elif grep -qE "BUILD FAILURE|BUILD ERROR" "${log}"; then
+    echo fail
+  else
+    echo warn
+  fi
+}
+
+echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}"
+
+for variant in "${matrix_variants[@]}"; do
+  if ! variant_exists "${variant}"; then
+    echo "SKIP variant '${variant}': not declared in variants.txt" >&2
+    continue
+  fi
+  v_root="$(variant_root "${variant}")"
+  # Ensure the variant tree is materialised (symlink/settings/dirs).
+  if [[ ! -x "${v_root}/maven/bin/mvn" || ! -e "${v_root}/settings.xml" ]]; then
+    "${dir}/variant-setup" "${variant}" >/dev/null 2>&1 || true
+  fi
+
+  for project in "${matrix_projects[@]}"; do
+    cell=$((cell + 1))
+    export VARIANT="${variant}"
+    # exec_mvn leaks `status` and writes a per-project log under the variant.
+    exec_mvn "${project}" "${task}" "${cell}" "${opts}" "${MATRIX_GOALS}"
+
+    # Newest log for this cell (handles retry suffixes).
+    cell_logdir="${v_root}/logs/${project}"
+    cell_log=$(ls -t "${cell_logdir}"/*.log 2>/dev/null | head -1 || true)
+    result=$(classify_log "${cell_log}")
+    btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
+
+    project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
+    head_commit=$(git -C "${project_dir}" rev-parse --short HEAD 2>/dev/null || echo "")
+    ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    cell_file="${v_root}/cells/${project}.json"
+    mkdir -p "$(dirname "${cell_file}")"
+    jq -n \
+      --arg status "${result}" \
+      --arg time "${btime}" \
+      --arg mvn "$(variant_field "${variant}" 2)" \
+      --arg jdk "$(variant_jdk "${variant}")" \
+      --arg head "${head_commit}" \
+      --arg host "${host}" \
+      --arg ts "${ts}" \
+      --arg log "${cell_log#"${root}"/}" \
+      '{status:$status, time:$time, mvn_version:$mvn, jdk:$jdk,
+        head_commit:$head, host:$host, ts:$ts, log:$log}' \
+      > "${cell_file}"
+  done
+  unset VARIANT
+done
+
+echo "Matrix complete: ${cell} cell(s) written under variants/*/cells/."
+echo "Render the table with: ${dir}/compat-render"

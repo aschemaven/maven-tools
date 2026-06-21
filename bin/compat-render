@@ -1,0 +1,102 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compat-render - render reports/compat-matrix.md from every variant's cells/.
+#
+# SYNOPSIS
+#   compat-render
+#
+# DESCRIPTION
+#   Reads variants/<variant>/cells/<project>.json for every variant declared in
+#   variants.txt and emits a Markdown matrix (rows = projects, columns =
+#   variants) to reports/compat-matrix.md. Pure render step: no builds, reads
+#   only result files, so it can run on any machine over merged/synced cells.
+#
+#   Icons mirror the upstream plugins-maven4.md matrix:
+#     ok -> :white_check_mark:   fail -> :x:   warn -> :warning:   missing -> —
+
+# Resolve the tools-repo root without sourcing common-functions (no side
+# effects, no project.list read needed here). readlink -f (not cd/pwd) so a
+# set CDPATH in the environment can't pollute the value.
+dir=$(dirname "${0}")
+root=$(readlink -f "${dir}/..")
+
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for compat-render" >&2; exit 1; }
+
+mkdir -p "${root}/reports"
+out="${root}/reports/compat-matrix.md"
+
+# Variants in declared order. (Portable: macOS /bin/bash 3.2 has no mapfile.)
+variants=()
+while IFS= read -r _name; do
+  [[ -n "${_name}" ]] && variants+=("${_name}")
+done < <(grep -vE '^[[:space:]]*(#|$)' "${root}/variants.txt" 2>/dev/null | awk '{print $1}')
+if [[ ${#variants[@]} -eq 0 ]]; then
+  echo "No variants declared in variants.txt" >&2
+  exit 1
+fi
+
+# Union of all projects that have at least one cell, sorted.
+projects=()
+while IFS= read -r _proj; do
+  [[ -n "${_proj}" ]] && projects+=("${_proj}")
+done < <(
+  for v in "${variants[@]}"; do
+    d="${root}/variants/${v}/cells"
+    [[ -d "${d}" ]] && find "${d}" -name '*.json' 2>/dev/null \
+      | sed -E "s#^${d}/##; s#\.json\$##"
+  done | sort -u
+)
+
+icon() {
+  case "$1" in
+    ok)   echo ':white_check_mark:' ;;
+    fail) echo ':x:' ;;
+    warn) echo ':warning:' ;;
+    *)    echo '—' ;;
+  esac
+}
+
+{
+  echo "# Maven Compatibility Matrix"
+  echo
+  echo "_Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(hostname -s 2>/dev/null || hostname || echo unknown)._"
+  echo
+  if [[ ${#projects[@]} -eq 0 ]]; then
+    echo "_No cells yet. Run \`bin/run-compat-matrix\` first._"
+  else
+    # Header row.
+    printf '| Project |'
+    for v in "${variants[@]}"; do printf ' %s |' "${v}"; done
+    printf '\n'
+    printf '|---|'
+    for _ in "${variants[@]}"; do printf '%s' '---|'; done
+    printf '\n'
+    # Data rows.
+    for p in "${projects[@]}"; do
+      printf '| `%s` |' "${p}"
+      for v in "${variants[@]}"; do
+        f="${root}/variants/${v}/cells/${p}.json"
+        if [[ -r "${f}" ]]; then
+          st=$(jq -r '.status // "warn"' "${f}")
+          tm=$(jq -r '.time // ""' "${f}")
+          printf ' %s %s |' "$(icon "${st}")" "${tm}"
+        else
+          printf ' %s |' "$(icon missing)"
+        fi
+      done
+      printf '\n'
+    done
+    echo
+    echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :warning: unparseable · — no result yet."
+    echo
+    echo "Variants:"
+    for v in "${variants[@]}"; do
+      ver=$(awk -v n="${v}" '$1==n {print $2}' "${root}/variants.txt")
+      echo "- \`${v}\` = Maven ${ver}"
+    done
+  fi
+} > "${out}"
+
+echo "Wrote ${out} (${#projects[@]} project row(s), ${#variants[@]} variant column(s))."

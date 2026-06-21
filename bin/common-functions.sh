@@ -147,6 +147,94 @@ get_extra_mvn_args() {
   awk -v p="${project}" '$1 == p {$1=""; sub(/^[[:space:]]+/, ""); print; exit}' "${file}" 2>/dev/null
 }
 
+# --- Variants (compat matrix) ----------------------------------------------
+# A "variant" bundles a Maven binary, its own settings.xml and local repo, an
+# optional JDK and an optional source branch, all rooted under the
+# self-contained directory ${root}/variants/<name>/. Variants are declared in
+# variants.txt (columns: <name> <mvn-version> [jdk] [branch]; # and blank
+# lines ignored; "-" means "unset" for the optional jdk/branch columns).
+#
+# These helpers are PURE lookups with no side effects -- exec_mvn wires them
+# into the build only when VARIANT is set, so sourcing this file changes
+# nothing for normal (variant-less) runs.
+
+# Self-contained root directory of a variant.
+variant_root() {
+  echo "${root}/variants/$1"
+}
+
+# Look up a single column for a variant from variants.txt.
+#   variant_field <name> <col>     col: 2=mvn-version 3=jdk 4=branch
+# Echoes the empty string if the variant or field is absent, or the field is
+# the "-" sentinel.
+variant_field() {
+  local name="$1" col="$2"
+  local file="${root}/variants.txt"
+  [[ -r "${file}" ]] || { echo ""; return; }
+  local val
+  val=$(awk -v n="${name}" -v c="${col}" '$1 == n {print $c; exit}' "${file}" 2>/dev/null)
+  [[ "${val}" == "-" ]] && val=""
+  echo "${val}"
+}
+
+# True if <name> is a declared variant (has a row in variants.txt).
+variant_exists() {
+  [[ -n "$(variant_field "$1" 2)" ]]
+}
+
+# Resolve the mvn binary for a variant, in order:
+#   1. variant-local  variants/<name>/maven/bin/mvn  (symlink or built distro)
+#   2. find_mvn_by_version <variant mvn-version>
+# Echoes the resolved path, or the empty string if neither resolves.
+variant_mvn() {
+  local name="$1"
+  local local_mvn
+  local_mvn="$(variant_root "${name}")/maven/bin/mvn"
+  if [[ -x "${local_mvn}" ]]; then
+    echo "${local_mvn}"
+    return
+  fi
+  local version
+  version=$(variant_field "${name}" 2)
+  [[ -n "${version}" ]] && find_mvn_by_version "${version}"
+}
+
+# Resolve the settings.xml for a variant: its own if present, else fall back
+# to the shared ${SETTINGS} template.
+variant_settings() {
+  local name="$1"
+  local s
+  s="$(variant_root "${name}")/settings.xml"
+  if [[ -r "${s}" ]]; then
+    echo "${s}"
+  else
+    echo "${SETTINGS}"
+  fi
+}
+
+# Resolve the local Maven repository for a variant (its own repository/ dir).
+variant_repo_local() {
+  echo "$(variant_root "$1")/repository"
+}
+
+# Resolve the JDK major version for a variant (column 3); empty = use default.
+variant_jdk() {
+  variant_field "$1" 3
+}
+
+# Resolve a JAVA_HOME for a JDK major version, preferring SDKman. Picks the
+# highest installed build whose name starts with "<major>" (e.g. major 21 ->
+# 21.0.10-tem). Echoes the home dir, or the empty string if none is found.
+find_java_home() {
+  local major="$1"
+  [[ -z "${major}" ]] && return
+  local base="${HOME}/.sdkman/candidates/java"
+  [[ -d "${base}" ]] || return
+  local best
+  best=$(ls -1 "${base}" 2>/dev/null | grep -E "^${major}([.-]|$)" | sort -V | tail -1)
+  [[ -n "${best}" ]] && echo "${base}/${best}"
+}
+
 # Load default EXCLUDE_PROJECTS from exclude-projects.txt unless the caller
 # has explicitly set the variable (including to the empty string, which
 # disables exclusion entirely).
@@ -345,13 +433,43 @@ exec_mvn() {
   # Full path to project directory (under MAVEN_PROJECTS_DIR)
   project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
 
+  # --- Variant context (compat matrix) -------------------------------------
+  # When VARIANT is set, override the Maven binary, settings, local repo, log
+  # root and JDK from the named variant (see variants.txt). Without VARIANT
+  # every var below keeps its historical default, so behaviour is unchanged.
+  local variant="${VARIANT:-}"
+  local v_logroot="${root}/logs"
+  local v_settings="${SETTINGS}"
+  local v_iso_root="${root}/.m2-isolated"
+  local v_repo=""            # empty => keep the caller-provided maven.repo.local
+  local v_javahome=""
+  if [[ -n "${variant}" ]]; then
+    if ! variant_exists "${variant}"; then
+      echo "${project} (${counter}/${noof_projects}) skipped: VARIANT '${variant}' not declared in variants.txt" >&2
+      return
+    fi
+    local v_root
+    v_root="$(variant_root "${variant}")"
+    v_logroot="${v_root}/logs"
+    v_settings="$(variant_settings "${variant}")"
+    v_iso_root="${v_root}/repository/isolated"
+    v_repo="${v_root}/repository"
+    v_javahome="$(find_java_home "$(variant_jdk "${variant}")")"
+  fi
+
   if ! test -r "${project_dir}/pom.xml" && eval "${ONLY_MAVEN}"; then
     echo "${project} is not a Maven project (${counter}/${noof_projects})"
     return
   fi
 
   test ! -d "${project_dir}" && echo "${project} does not exist" >&2 && return
-  mkdir -p "${root}/logs/${project}"
+  mkdir -p "${v_logroot}/${project}"
+
+  # Variant base local repo: override the caller's -Dmaven.repo.local. A
+  # per-project isolated repo (appended later) still wins over this.
+  if [[ -n "${variant}" ]]; then
+    opts="${opts} -Dmaven.repo.local=${v_repo}"
+  fi
 
   # When 'clean' is part of the requested goals, recursively wipe
   # build-output target/ directories before invoking Maven. Apache
@@ -437,7 +555,7 @@ exec_mvn() {
     done
   fi
   if ${is_isolated}; then
-    local iso_path="${root}/.m2-isolated/${project//\//--}"
+    local iso_path="${v_iso_root}/${project//\//--}"
     mkdir -p "${iso_path}"
     opts="${opts} -Dmaven.repo.local=${iso_path}"
     ext="${ext} (isolated M2)"
@@ -453,7 +571,17 @@ exec_mvn() {
   fi
 
   mvn_info=""
-  if test -r "${project_dir}/mvnw"; then
+  if [[ -n "${variant}" ]]; then
+    # Variant runs use the variant's Maven, deliberately ignoring any project
+    # mvnw wrapper (the whole point is testing a chosen Maven version).
+    mvn="$(variant_mvn "${variant}")"
+    if [[ -z "${mvn}" ]]; then
+      echo "WARNING: variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_field "${variant}" 2)); using system mvn" >&2
+      mvn="mvn"
+    fi
+    mvn_info="variant ${variant} (Maven $(variant_field "${variant}" 2))"
+    [[ -n "${v_javahome}" ]] && mvn_info="${mvn_info}, JDK $(variant_jdk "${variant}")"
+  elif test -r "${project_dir}/mvnw"; then
     mvn="./mvnw"
     mvn_info="with wrapper"
   else
@@ -484,7 +612,7 @@ exec_mvn() {
     max_retries=$(get_flaky_retry_count "${project}")
   fi
 
-  logs="${root}/logs/${project}/${task}-$$-${counter}.log"
+  logs="${v_logroot}/${project}/${task}-$$-${counter}.log"
   echo -n "${project} (${counter}/${noof_projects}), a Maven project ${mvn_info}, build (logs: '${logs}') "
   set +e
   local attempt=0
@@ -497,8 +625,9 @@ exec_mvn() {
     fi
     (
       cd "${project_dir}"
+      [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       # shellcheck disable=SC2086
-      ${mvn} -B -s "${SETTINGS}" ${opts} ${goals} 2>&1
+      ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
     ) > "${current_logs}"
     status="${?}"
     [[ ${status} -eq 0 ]] && break
