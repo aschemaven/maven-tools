@@ -41,6 +41,45 @@
 : "${ONLY_MAVEN:=true}"
 : "${MAVEN_PROJECTS_DIR:=maven}"
 : "${SETTINGS:=${PWD}/settings.xml}"
+
+# --- Parallelism (Phase 4) -------------------------------------------------
+# CPU detection (Linux/macOS) for callers that want to scale to the machine.
+detect_cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+  elif [[ "$(uname)" == "Darwin" ]]; then
+    sysctl -n hw.ncpu
+  else
+    getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4
+  fi
+}
+
+# Max concurrent build jobs. Default 1 = sequential (historical behaviour, zero
+# risk). Set >1 to parallelise. NOTE: concurrent builds may share a local Maven
+# repo -- resolver's enhanced-LRM locking + isolated-m2-projects.txt cover the
+# worst offenders; run-compat-matrix parallelises over VARIANTS (distinct repos)
+# so its cells never collide.
+: "${PARALLEL_JOBS:=1}"
+
+# run_parallel <max_jobs> <worker_fn> <item> [item ...]
+# Runs worker_fn for each item, at most <max_jobs> concurrently, invoking it as
+#   worker_fn <item> <index>
+# Portable to macOS /bin/bash 3.2 (no `wait -n`): throttles by polling the
+# running-job count. Each worker should emit its console output as a single
+# printf line so concurrent lines stay intact.
+run_parallel() {
+  local max_jobs="$1"; shift
+  local worker="$1"; shift
+  local item idx=0
+  for item in "$@"; do
+    while [ "$(jobs -rp 2>/dev/null | wc -l | tr -d ' ')" -ge "${max_jobs}" ]; do
+      sleep 0.2
+    done
+    idx=$((idx + 1))
+    "${worker}" "${item}" "${idx}" &
+  done
+  wait
+}
 # Find a Maven binary by version, searching known installation locations.
 # Checks (in order): SDKman, GitHub Actions tool-cache, MAVEN_HOMES (custom).
 # Returns the path to the mvn binary, or empty string if not found.

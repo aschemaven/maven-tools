@@ -93,10 +93,26 @@ overall_log="${root}/logs/run-maven-${goals// /-}-$$.log"
 # The loop must not propagate those failures to the script exit code.
 set +e
 {
-  for project in ${PROJECTS}; do
-    counter=$((counter + 1))
-    exec_mvn "${project}" "${goals// /-}" "${counter}" "${opts}" "${goals}"
-  done
+  if [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
+    # Parallel: each project runs as a background job. The worker captures the
+    # cell's console output and flushes it as ONE printf line so concurrent
+    # output stays intact for the summary parser below. (FAIL_FAST in parallel
+    # mode only aborts the affected job, not the whole batch.)
+    _mvn_worker() {
+      local project="$1" idx="$2" tmp
+      tmp=$(mktemp)
+      exec_mvn "${project}" "${goals// /-}" "${idx}" "${opts}" "${goals}" >"${tmp}" 2>&1
+      printf '%s\n' "$(cat "${tmp}")"
+      rm -f "${tmp}"
+    }
+    # shellcheck disable=SC2086
+    run_parallel "${PARALLEL_JOBS}" _mvn_worker ${PROJECTS}
+  else
+    for project in ${PROJECTS}; do
+      counter=$((counter + 1))
+      exec_mvn "${project}" "${goals// /-}" "${counter}" "${opts}" "${goals}"
+    done
+  fi
 } 2>&1 | tee "${overall_log}"
 set -e
 

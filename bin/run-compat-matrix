@@ -51,9 +51,9 @@ opts="${MAVEN_REPO_LOCAL_OPT}"
 task="${MATRIX_GOALS// /-}"
 
 total=$(( ${#matrix_variants[@]} * ${#matrix_projects[@]} ))
-# exec_mvn prints "(counter/noof_projects)"; make that reflect the full matrix.
-noof_projects="${total}"
-cell=0
+# exec_mvn prints "(index/noof_projects)"; make the denominator the per-column
+# project count so each column's progress reads naturally.
+noof_projects="${#matrix_projects[@]}"
 
 # Classify a Maven build log -> ok|fail|warn (mirrors the upstream matrix).
 classify_log() {
@@ -68,31 +68,33 @@ classify_log() {
   fi
 }
 
-echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}"
-
-for variant in "${matrix_variants[@]}"; do
+# Build one variant's whole column (its projects, sequentially). This is the
+# unit of parallelism: distinct variants own distinct local repos, so running
+# columns concurrently never races on a shared repo. Projects within a column
+# stay sequential (they share that variant's repo). Each cell prints its
+# console output as ONE printf line so concurrent columns stay intact.
+build_variant_column() {
+  local variant="$1"
   if ! variant_exists "${variant}"; then
-    echo "SKIP variant '${variant}': not declared in variants.txt" >&2
-    continue
+    printf '%s\n' "SKIP variant '${variant}': not declared in variants.txt" >&2
+    return
   fi
+  local v_root
   v_root="$(variant_root "${variant}")"
-  # Ensure the variant tree is materialised (symlink/settings/dirs).
   if [[ ! -x "${v_root}/maven/bin/mvn" || ! -e "${v_root}/settings.xml" ]]; then
     "${dir}/variant-setup" "${variant}" >/dev/null 2>&1 || true
   fi
 
+  local project i=0 tmp cell_log result btime project_dir head_commit ts cell_file
   for project in "${matrix_projects[@]}"; do
-    cell=$((cell + 1))
-    export VARIANT="${variant}"
-    # exec_mvn leaks `status` and writes a per-project log under the variant.
-    exec_mvn "${project}" "${task}" "${cell}" "${opts}" "${MATRIX_GOALS}"
+    i=$((i + 1))
+    tmp=$(mktemp)
+    # Per-call VARIANT (no global export) so parallel columns don't clobber it.
+    VARIANT="${variant}" exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1
 
-    # Newest log for this cell (handles retry suffixes).
-    cell_logdir="${v_root}/logs/${project}"
-    cell_log=$(ls -t "${cell_logdir}"/*.log 2>/dev/null | head -1 || true)
+    cell_log=$(ls -t "${v_root}/logs/${project}"/*.log 2>/dev/null | head -1 || true)
     result=$(classify_log "${cell_log}")
     btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
-
     project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
     head_commit=$(git -C "${project_dir}" rev-parse --short HEAD 2>/dev/null || echo "")
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -111,9 +113,21 @@ for variant in "${matrix_variants[@]}"; do
       '{status:$status, time:$time, mvn_version:$mvn, jdk:$jdk,
         head_commit:$head, host:$host, ts:$ts, log:$log}' \
       > "${cell_file}"
-  done
-  unset VARIANT
-done
 
-echo "Matrix complete: ${cell} cell(s) written under variants/*/cells/."
+    printf '%s\n' "$(cat "${tmp}")"
+    rm -f "${tmp}"
+  done
+}
+
+echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over variants)"
+
+if [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
+  run_parallel "${PARALLEL_JOBS}" build_variant_column "${matrix_variants[@]}"
+else
+  for variant in "${matrix_variants[@]}"; do
+    build_variant_column "${variant}"
+  done
+fi
+
+echo "Matrix complete: ${total} cell(s) written under variants/*/cells/."
 echo "Render the table with: ${dir}/compat-render"
