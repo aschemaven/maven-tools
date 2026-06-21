@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# run-compat-4x - build the worktree-based 4.x-native lines and render them.
+#
+# SYNOPSIS
+#   run-compat-4x
+#
+# DESCRIPTION
+#   Convenience wrapper for the 4.x-native lines that need a worktree (those
+#   without a "-4" manifest entry; see compat-4x-branches.txt):
+#     1. ensure the worktrees exist (bin/compat-4x-setup)
+#     2. run the matrix over maven-4x/<project> for the descriptor's projects,
+#        with MATRIX_NS=_4x so their cells land in variants/<v>/cells/_4x/ and
+#        render in compat-render's "4.x-native lines" section
+#     3. re-render reports/compat-matrix.md
+#
+#   The "-4" manifest projects (plugins/core-4/*, etc.) are NOT handled here --
+#   they are part of the normal run-compat-matrix run.
+#
+# ENVIRONMENT
+#   COMPAT_4X_FILE  descriptor (default compat-4x-branches.txt)
+#   VARIANTS, MATRIX_GOALS, PARALLEL_JOBS: as for run-compat-matrix.
+
+dir=$(dirname "${0}")
+source "${dir}/common-functions.sh"
+
+: "${COMPAT_4X_FILE:=${root}/compat-4x-branches.txt}"
+[[ -r "${COMPAT_4X_FILE}" ]] || { echo "No descriptor ${COMPAT_4X_FILE}" >&2; exit 1; }
+
+# 1. worktrees
+"${dir}/compat-4x-setup"
+
+# 2. project list = descriptor entries whose worktree actually materialised
+projects=""
+while read -r project _branch _rest; do
+  [[ -z "${project}" || "${project}" == \#* ]] && continue
+  [[ -d "${root}/maven-4x/${project}" ]] && projects="${projects} ${project}"
+done < "${COMPAT_4X_FILE}"
+
+if [[ -z "${projects// /}" ]]; then
+  echo "run-compat-4x: no 4.x worktrees present (all entries skipped by audit?); nothing to build." >&2
+  exit 0
+fi
+
+echo "run-compat-4x: building 4.x-native lines:${projects}"
+MAVEN_PROJECTS_DIR="maven-4x" MATRIX_NS="_4x" PROJECTS="${projects# }" "${dir}/run-compat-matrix"
+
+# 3. render (covers both manifest and 4.x-native sections)
+"${dir}/compat-render"

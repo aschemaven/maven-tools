@@ -1,0 +1,30 @@
+# 4.x-native lines that need a git WORKTREE (Deliverable 3 / Phase 7).
+#
+# Most 4.x-native plugin lines are ALREADY checked out by the repo manifest as
+# their own "-4" projects and are built by the normal matrix (and rendered in
+# the "4.x-native lines" section by compat-render):
+#     plugins/core-4/maven-clean-plugin      plugins/core-4/maven-compiler-plugin
+#     plugins/core-4/maven-deploy-plugin     plugins/core-4/maven-install-plugin
+#     plugins/core-4/maven-resources-plugin  plugins/packaging-4/maven-jar-plugin
+#     plugins/packaging-4/maven-source-plugin  shared-4/filtering
+# Those need NOTHING here.
+#
+# This file lists the REMAINING 4.x lines that have NO "-4" manifest entry, so
+# we must materialise a throwaway git worktree of their 4.x branch (out of the
+# repo shared bare store) and build that. bin/compat-4x-setup creates the
+# worktrees under maven-4x/<project>; bin/run-compat-4x then runs the matrix
+# over them with MATRIX_NS=_4x so their cells render in the 4.x-native section.
+#
+# Format:  <project-path>            <4x-branch>
+# Lines starting with # and blank lines are ignored.
+#
+# IMPORTANT: every <4x-branch> below is a BEST GUESS and MUST be verified per
+# plugin (compat-4x-setup audits: it skips entries whose branch does not exist
+# on the component and warns). deploy/etc. may use mvn4 / maven4-enabled rather
+# than master; site's 4.x line may live on master while its 3.x line is a -3.x
+# branch. Confirm with `git -C maven/<project> branch -r` before trusting a row.
+
+# project-path                          4x-branch   (VERIFY each!)
+plugins/core/maven-site-plugin          master
+plugins/tools/plugin-tools              master
+shared/reporting-impl                   master

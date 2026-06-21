@@ -1,0 +1,81 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compat-4x-setup - materialise git worktrees for 4.x-native plugin lines that
+# have NO "-4" manifest entry (Deliverable 3 / Phase 7).
+#
+# SYNOPSIS
+#   compat-4x-setup
+#
+# DESCRIPTION
+#   Reads compat-4x-branches.txt ("<project-path> <4x-branch>") and, for each
+#   entry, creates a throwaway git worktree of that branch (out of the
+#   component's repo) at maven-4x/<project>. Plugins that already ship as "-4"
+#   manifest projects (plugins/core-4/*, packaging-4/*, shared-4/*) need NOTHING
+#   here -- the normal matrix builds them and compat-render shows them in the
+#   4.x-native section.
+#
+#   Branch AUDIT: an entry whose branch does not exist on the component (neither
+#   origin/<branch> nor a local <branch>) is SKIPPED with a warning, so a wrong
+#   guess in the descriptor never aborts the run.
+#
+#   Build the worktrees with:  bin/run-compat-4x
+#
+# ENVIRONMENT
+#   COMPAT_4X_FILE      descriptor path (default compat-4x-branches.txt)
+#   MAVEN_PROJECTS_DIR  source tree holding the components (default maven)
+#
+# NOTE: `git worktree add` writes worktree metadata into the component's repo,
+# so against the real maven/ tree this touches maven/ -- run it when no other
+# build is using that tree.
+
+dir=$(dirname "${0}")
+source "${dir}/common-functions.sh"
+
+: "${COMPAT_4X_FILE:=${root}/compat-4x-branches.txt}"
+maven_dir="${root}/${MAVEN_PROJECTS_DIR}"
+fourx_root="${root}/maven-4x"
+
+[[ -r "${COMPAT_4X_FILE}" ]] || { echo "No descriptor ${COMPAT_4X_FILE}" >&2; exit 1; }
+
+made=0 skipped=0
+while read -r project branch _rest; do
+  [[ -z "${project}" || "${project}" == \#* ]] && continue
+  [[ -n "${branch}" ]] || { echo "SKIP ${project}: no branch in descriptor" >&2; skipped=$((skipped+1)); continue; }
+
+  comp="${maven_dir}/${project}"
+  if [[ ! -e "${comp}/.git" ]]; then
+    echo "SKIP ${project}: not a git checkout under ${maven_dir}" >&2; skipped=$((skipped+1)); continue
+  fi
+
+  # Branch audit: prefer a remote-tracking ref, fall back to a local branch.
+  ref=""
+  if git -C "${comp}" rev-parse --verify -q "origin/${branch}" >/dev/null 2>&1; then
+    ref="origin/${branch}"
+  elif git -C "${comp}" rev-parse --verify -q "${branch}" >/dev/null 2>&1; then
+    ref="${branch}"
+  else
+    echo "SKIP ${project}: branch '${branch}' not found (origin/${branch} or ${branch}) -- verify the descriptor" >&2
+    skipped=$((skipped+1)); continue
+  fi
+
+  dest="${fourx_root}/${project}"
+  if [[ -d "${dest}" ]]; then
+    # Refresh an existing worktree to the (possibly moved) ref.
+    git -C "${dest}" checkout -q --detach "${ref}" 2>/dev/null \
+      && echo "refreshed ${project} -> ${ref}" \
+      || echo "WARNING: could not refresh ${dest} to ${ref}" >&2
+  else
+    mkdir -p "$(dirname "${dest}")"
+    if git -C "${comp}" worktree add -q --detach "${dest}" "${ref}" 2>/dev/null; then
+      echo "worktree ${project} -> ${ref}  at maven-4x/${project}"
+      made=$((made+1))
+    else
+      echo "WARNING: worktree add failed for ${project} (${ref})" >&2
+      skipped=$((skipped+1))
+    fi
+  fi
+done < "${COMPAT_4X_FILE}"
+
+echo "compat-4x-setup: ${made} worktree(s) created, ${skipped} skipped. Build with bin/run-compat-4x."

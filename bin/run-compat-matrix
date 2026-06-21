@@ -31,6 +31,10 @@ dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
 
 : "${MATRIX_GOALS:=-Prun-its clean verify}"
+# Optional cell namespace: cells go to variants/<v>/cells/<MATRIX_NS>/<project>.
+# Used by run-compat-4x (MATRIX_NS=_4x) so worktree-built 4.x lines do not
+# collide with the manifest cells and render in the 4.x-native section.
+: "${MATRIX_NS:=}"
 
 # Variants to run. (Portable: macOS /bin/bash 3.2 has no mapfile.)
 if [[ -n "${VARIANTS:-}" ]]; then
@@ -106,7 +110,7 @@ build_component_row() {
     btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    cell_file="${v_root}/cells/${project}.json"
+    cell_file="${v_root}/cells/${MATRIX_NS:+${MATRIX_NS}/}${project}.json"
     mkdir -p "$(dirname "${cell_file}")"
     jq -n \
       --arg status "${result}" \

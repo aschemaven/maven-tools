@@ -58,6 +58,51 @@ icon() {
   esac
 }
 
+# A 4.x-native row is a project on a "-4" line: plugins/core-4/*,
+# plugins/packaging-4/*, shared-4/* (already checked out by the repo manifest),
+# or a cell written under the worktree namespace _4x/ (Deliverable 3 worktrees
+# for plugins that have no -4/ manifest entry).
+is_fourx() { [[ "$1" =~ (^|/)[A-Za-z0-9_]*-4/ || "$1" == _4x/* ]]; }
+
+# Emit one section: "## <title>" then a matrix table for the given project list.
+emit_table() {
+  local title="$1" plist="$2" p v f st tm
+  echo "## ${title}"
+  echo
+  if [[ -z "${plist// /}" ]]; then
+    echo "_none_"
+    echo
+    return
+  fi
+  printf '| Project |'
+  for v in "${variants[@]}"; do printf ' %s |' "${v}"; done
+  printf '\n'
+  printf '|---|'
+  for _ in "${variants[@]}"; do printf '%s' '---|'; done
+  printf '\n'
+  for p in ${plist}; do
+    printf '| `%s` |' "${p#_4x/}"
+    for v in "${variants[@]}"; do
+      f="${root}/variants/${v}/cells/${p}.json"
+      if [[ -r "${f}" ]]; then
+        st=$(jq -r '.status // "warn"' "${f}")
+        tm=$(jq -r '.time // ""' "${f}")
+        printf ' %s %s |' "$(icon "${st}")" "${tm}"
+      else
+        printf ' %s |' "$(icon missing)"
+      fi
+    done
+    printf '\n'
+  done
+  echo
+}
+
+# Bucket projects into the manifest (3.x) section and the 4.x-native section.
+main_list="" ; fourx_list=""
+for p in "${projects[@]}"; do
+  if is_fourx "${p}"; then fourx_list="${fourx_list} ${p}"; else main_list="${main_list} ${p}"; fi
+done
+
 {
   echo "# Maven Compatibility Matrix"
   echo
@@ -66,29 +111,8 @@ icon() {
   if [[ ${#projects[@]} -eq 0 ]]; then
     echo "_No cells yet. Run \`bin/run-compat-matrix\` first._"
   else
-    # Header row.
-    printf '| Project |'
-    for v in "${variants[@]}"; do printf ' %s |' "${v}"; done
-    printf '\n'
-    printf '|---|'
-    for _ in "${variants[@]}"; do printf '%s' '---|'; done
-    printf '\n'
-    # Data rows.
-    for p in "${projects[@]}"; do
-      printf '| `%s` |' "${p}"
-      for v in "${variants[@]}"; do
-        f="${root}/variants/${v}/cells/${p}.json"
-        if [[ -r "${f}" ]]; then
-          st=$(jq -r '.status // "warn"' "${f}")
-          tm=$(jq -r '.time // ""' "${f}")
-          printf ' %s %s |' "$(icon "${st}")" "${tm}"
-        else
-          printf ' %s |' "$(icon missing)"
-        fi
-      done
-      printf '\n'
-    done
-    echo
+    emit_table "Manifest lines (3.x / GA)" "${main_list}"
+    emit_table "4.x-native lines" "${fourx_list}"
     echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :warning: unparseable · — no result yet."
     echo
     echo "Variants:"
