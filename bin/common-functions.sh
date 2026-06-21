@@ -147,7 +147,7 @@ select_mvn() {
 # shellcheck disable=SC2034 disable=SC2154
 # root is used in other scripts, dir is injected by the caller
 root=$(readlink -f "${dir}/..")
-[[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat ${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list)"
+[[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat "${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list" 2>/dev/null || true)"
 
 # Read non-comment, non-blank lines from a file as a space-separated list.
 # Only the FIRST whitespace-separated token of each line is returned, so

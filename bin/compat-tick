@@ -1,0 +1,190 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compat-tick - change-driven compat-matrix refresh (Phase 5).
+#
+# SYNOPSIS
+#   compat-tick
+#
+# DESCRIPTION
+#   One hourly tick (via launchd; see launchd/eu.aschemann.maven-compat.plist):
+#     1. sync the maven/ source tree (only a real `repo` tree; auto-skipped for
+#        test checkouts without .repo)
+#     2. detect what changed since the last tick, on TWO axes:
+#          components  - a project's source HEAD moved
+#          variants    - a variant's Maven changed (version bump / rebuilt distro)
+#     3. expand to the cells to rebuild via the two rules:
+#          (a) changed component  -> rebuild it across ALL variants
+#          (b) changed variant    -> rebuild ALL components with that variant
+#     4. invalidate + rebuild only those cells (via run-compat-matrix)
+#     5. re-render reports/compat-matrix.md and reports/compat-drift.md
+#
+#   Role gating (machines.txt / COMPAT_ROLE): a "controller" (daily-work
+#   machine) only runs heavy builds inside its nightly window AND when idle; a
+#   "runner" builds whenever the tick fires. The cheap brain (sync + detect +
+#   render) always runs.
+#
+# ENVIRONMENT
+#   COMPAT_ROLE      controller|runner (else machines.txt; default controller)
+#   FORCE_BUILD      true to bypass controller nightly/idle gating
+#   NIGHTLY_START    nightly window start hour, local (default 0)
+#   NIGHTLY_END      nightly window end hour,   local (default 6)
+#   IDLE_MIN_SECONDS minimum HID idle before a controller builds (default 600)
+#   COMPAT_SYNC      auto (default; sync only real repo trees) | false
+#   MATRIX_GOALS     goals per cell (default "-Prun-its clean verify")
+#   PARALLEL_JOBS    forwarded to run-compat-matrix
+#   PROJECTS, MAVEN_PROJECTS_DIR, VARIANTS: as for run-compat-matrix.
+
+dir=$(dirname "${0}")
+source "${dir}/common-functions.sh"
+
+: "${COMPAT_ROLE:=}"
+: "${FORCE_BUILD:=false}"
+: "${NIGHTLY_START:=0}"
+: "${NIGHTLY_END:=6}"
+: "${IDLE_MIN_SECONDS:=600}"
+: "${COMPAT_SYNC:=auto}"
+: "${MATRIX_GOALS:=-Prun-its clean verify}"
+export PARALLEL_JOBS MATRIX_GOALS
+
+maven_dir="${root}/${MAVEN_PROJECTS_DIR}"
+state_dir="${root}/reports"
+mkdir -p "${state_dir}"
+heads_state="${state_dir}/tick-heads.tsv"
+vars_state="${state_dir}/tick-variants.tsv"
+
+host=$(hostname -s 2>/dev/null || hostname || echo unknown)
+
+# All declared variants / all resolved projects (space-separated).
+all_variants=$(grep -vE '^[[:space:]]*(#|$)' "${root}/variants.txt" 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
+all_components="${PROJECTS}"
+
+# --- role -----------------------------------------------------------------
+role="${COMPAT_ROLE}"
+if [[ -z "${role}" ]]; then
+  role=$(awk -v h="${host}" '$1==h {print $2; exit}' "${root}/machines.txt" 2>/dev/null || true)
+fi
+: "${role:=controller}"
+
+mac_idle_seconds() {
+  [[ "$(uname)" == "Darwin" ]] || { echo 999999; return; }   # non-mac: treat as idle
+  local ns
+  ns=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print $NF; exit}')
+  if [[ "${ns}" =~ ^[0-9]+$ ]]; then echo $(( ns / 1000000000 )); else echo 0; fi
+}
+in_nightly_window() {
+  local hr; hr=$((10#$(date +%H)))
+  if [[ "${NIGHTLY_START}" -le "${NIGHTLY_END}" ]]; then
+    [[ "${hr}" -ge "${NIGHTLY_START}" && "${hr}" -lt "${NIGHTLY_END}" ]]
+  else                       # window wraps midnight
+    [[ "${hr}" -ge "${NIGHTLY_START}" || "${hr}" -lt "${NIGHTLY_END}" ]]
+  fi
+}
+should_build() {
+  if ${FORCE_BUILD}; then return 0; fi
+  if [[ "${role}" == "runner" ]]; then return 0; fi
+  if in_nightly_window && [[ "$(mac_idle_seconds)" -ge "${IDLE_MIN_SECONDS}" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# --- 1. sync (only a real repo tree) --------------------------------------
+if [[ "${COMPAT_SYNC}" != "false" && -d "${maven_dir}/.repo" ]]; then
+  echo "compat-tick: repo sync in ${maven_dir}"
+  ( CDPATH= cd "${maven_dir}" && repo sync -j"$(detect_cpu_count)" ) \
+    || echo "WARNING: repo sync failed; continuing with current HEADs" >&2
+else
+  echo "compat-tick: skip sync (no ${maven_dir}/.repo or COMPAT_SYNC=false)"
+fi
+
+# --- 2. detect changes ----------------------------------------------------
+current_heads="${state_dir}/tick-heads.current"
+: > "${current_heads}"
+for project in ${all_components}; do
+  pd="${maven_dir}/${project}"
+  [[ -e "${pd}/.git" ]] || continue
+  c=$(git -C "${pd}" rev-parse --short HEAD 2>/dev/null || echo "?")
+  printf '%s\t%s\n' "${project}" "${c}" >> "${current_heads}"
+done
+sort -o "${current_heads}" "${current_heads}"
+
+current_vars="${state_dir}/tick-variants.current"
+: > "${current_vars}"
+for v in ${all_variants}; do
+  fp=$(variant_field "${v}" 2)                       # version string
+  m="$(variant_root "${v}")/maven/bin/mvn"
+  if [[ -e "${m}" ]]; then
+    mt=$(stat -f %m "${m}" 2>/dev/null || stat -c %Y "${m}" 2>/dev/null || echo 0)
+    fp="${fp}:${mt}"
+  fi
+  printf '%s\t%s\n' "${v}" "${fp}" >> "${current_vars}"
+done
+sort -o "${current_vars}" "${current_vars}"
+
+prev_heads="${heads_state}"; [[ -r "${prev_heads}" ]] || prev_heads=/dev/null
+prev_vars="${vars_state}";   [[ -r "${prev_vars}"  ]] || prev_vars=/dev/null
+# Print first-column keys whose value changed or is new. Distinguish the two
+# files by FILENAME (NOT the NR==FNR trick, which misfires when the prev file
+# is empty -- e.g. /dev/null on the first tick -- treating every current row as
+# "old" and detecting no change).
+diff_keys() {
+  awk -F'\t' -v prevf="$1" '
+    FILENAME == prevf { old[$1] = $2; next }
+    (!($1 in old) || old[$1] != $2) { print $1 }
+  ' "$1" "$2" | tr '\n' ' '
+}
+changed_components=$(diff_keys "${prev_heads}" "${current_heads}")
+changed_variants=$(diff_keys "${prev_vars}" "${current_vars}")
+
+echo "compat-tick: role=${role} changed-components=[${changed_components% }] changed-variants=[${changed_variants% }]"
+
+# --- 3+4. rebuild affected cells ------------------------------------------
+invalidate_cells() {  # <components> <variants>
+  local comps="$1" vars="$2" v c f
+  for v in ${vars}; do
+    for c in ${comps}; do
+      f="$(variant_root "${v}")/cells/${c}.json"
+      [[ -f "${f}" ]] && rm -f "${f}"
+    done
+  done
+  return 0   # never let a missing-file [[ -f ]] leave a non-zero exit (set -e)
+}
+list_minus() {  # items in $1 that are not in $2
+  comm -23 <(printf '%s\n' $1 | sort -u) <(printf '%s\n' $2 | sort -u) | tr '\n' ' '
+}
+
+if [[ -z "${changed_components// /}" && -z "${changed_variants// /}" ]]; then
+  echo "compat-tick: nothing changed; re-rendering only."
+elif should_build; then
+  # Rule (a): changed components x all variants.
+  if [[ -n "${changed_components// /}" ]]; then
+    echo "compat-tick: rule (a) -> [${changed_components% }] x all variants"
+    invalidate_cells "${changed_components}" "${all_variants}"
+    VARIANTS="${all_variants}" PROJECTS="${changed_components}" \
+      MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
+  fi
+  # Rule (b): changed variants x all components (minus the overlap already done).
+  if [[ -n "${changed_variants// /}" ]]; then
+    rb=$(list_minus "${all_components}" "${changed_components}")
+    if [[ -n "${rb// /}" ]]; then
+      echo "compat-tick: rule (b) -> all-minus-changed x [${changed_variants% }]"
+      invalidate_cells "${rb}" "${changed_variants}"
+      VARIANTS="${changed_variants}" PROJECTS="${rb}" \
+        MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
+    fi
+  fi
+  # Consume the change set only after a successful build round.
+  mv -f "${current_heads}" "${heads_state}"
+  mv -f "${current_vars}"  "${vars_state}"
+else
+  echo "compat-tick: role '${role}' not building now (outside nightly+idle; FORCE_BUILD=true to override)."
+  echo "compat-tick: would rebuild components=[${changed_components% }] variants=[${changed_variants% }]"
+  rm -f "${current_heads}" "${current_vars}"   # leave state stale so next allowed tick still sees the change
+fi
+
+# --- 5. render (always; cheap) --------------------------------------------
+"${dir}/compat-render" || true
+"${dir}/compat-drift" >/dev/null 2>&1 && echo "compat-tick: drift report updated" \
+  || echo "compat-tick: drift skipped (offline?)"

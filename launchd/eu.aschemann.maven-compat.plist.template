@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent that fires the compat-matrix tick hourly.
+
+  Install (per machine):
+    sed "s#__TOOLS_ROOT__#$PWD#" launchd/eu.aschemann.maven-compat.plist.template \
+      > ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
+    launchctl load ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
+
+  compat-tick decides per mach.txt role whether to actually build: a
+  "controller" only builds in its nightly+idle window, a "runner" builds
+  whenever the tick fires. So an hourly cadence is safe on the work machine.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>eu.aschemann.maven-compat</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__TOOLS_ROOT__/bin/compat-tick"</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>3600</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__TOOLS_ROOT__/logs/compat-tick.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__TOOLS_ROOT__/logs/compat-tick.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>

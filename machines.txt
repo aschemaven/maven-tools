@@ -1,0 +1,18 @@
+# Compat-matrix machine roles (Phase 5).
+#
+# Maps a host short-name (output of `hostname -s`) to a role that controls
+# whether compat-tick may run heavy IT builds:
+#
+#   controller  the daily-work machine: heavy builds ONLY in the nightly
+#               window AND when the machine is idle (no recent HID input).
+#               The cheap brain (sync + change detection + render) always runs.
+#   runner      a dedicated build box: builds freely whenever the tick fires.
+#
+# Format:  <host-short-name>   <role>
+# Lines starting with # and blank lines are ignored.
+# Override at runtime with COMPAT_ROLE=controller|runner.
+# Unknown hosts default to "controller" (the polite choice).
+
+godecane          controller
+# intel-macbook   runner
+# linux-laptop    runner

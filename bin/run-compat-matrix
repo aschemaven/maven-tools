@@ -51,9 +51,9 @@ opts="${MAVEN_REPO_LOCAL_OPT}"
 task="${MATRIX_GOALS// /-}"
 
 total=$(( ${#matrix_variants[@]} * ${#matrix_projects[@]} ))
-# exec_mvn prints "(index/noof_projects)"; make the denominator the per-column
-# project count so each column's progress reads naturally.
-noof_projects="${#matrix_projects[@]}"
+# exec_mvn prints "(index/noof_projects)"; each row iterates the variants, so
+# make the denominator the variant count for natural per-row progress.
+noof_projects="${#matrix_variants[@]}"
 
 # Classify a Maven build log -> ok|fail|warn (mirrors the upstream matrix).
 classify_log() {
@@ -68,35 +68,42 @@ classify_log() {
   fi
 }
 
-# Build one variant's whole column (its projects, sequentially). This is the
-# unit of parallelism: distinct variants own distinct local repos, so running
-# columns concurrently never races on a shared repo. Projects within a column
-# stay sequential (they share that variant's repo). Each cell prints its
-# console output as ONE printf line so concurrent columns stay intact.
-build_variant_column() {
-  local variant="$1"
-  if ! variant_exists "${variant}"; then
-    printf '%s\n' "SKIP variant '${variant}': not declared in variants.txt" >&2
-    return
-  fi
-  local v_root
+# Ensure every requested variant is materialised up-front (sequentially, in the
+# main shell) so concurrent rows below never race on creating variants/<v>/.
+for variant in "${matrix_variants[@]}"; do
+  variant_exists "${variant}" || { echo "SKIP variant '${variant}': not declared in variants.txt" >&2; continue; }
   v_root="$(variant_root "${variant}")"
   if [[ ! -x "${v_root}/maven/bin/mvn" || ! -e "${v_root}/settings.xml" ]]; then
     "${dir}/variant-setup" "${variant}" >/dev/null 2>&1 || true
   fi
+done
 
-  local project i=0 tmp cell_log result btime project_dir head_commit ts cell_file
-  for project in "${matrix_projects[@]}"; do
+# Build one component's whole ROW (across all variants, sequentially). This is
+# the unit of parallelism: distinct components have distinct source trees, so
+# running rows concurrently never has two mvn processes in the same checkout
+# (which would collide on target/). Variants within a row stay sequential
+# (they share the component's source dir). Concurrent rows may write into the
+# same per-variant local repo -- resolver enhanced-LRM locking +
+# isolated-m2-projects.txt cover that (same caveat as parallel run-maven).
+# Each cell prints its console output as ONE printf line so concurrent rows
+# stay intact.
+build_component_row() {
+  local project="$1"
+  local project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
+  local head_commit
+  head_commit=$(git -C "${project_dir}" rev-parse --short HEAD 2>/dev/null || echo "")
+  local variant v_root i=0 tmp cell_log result btime ts cell_file
+  for variant in "${matrix_variants[@]}"; do
+    variant_exists "${variant}" || continue
+    v_root="$(variant_root "${variant}")"
     i=$((i + 1))
     tmp=$(mktemp)
-    # Per-call VARIANT (no global export) so parallel columns don't clobber it.
+    # Per-call VARIANT (no global export) so parallel rows do not clobber it.
     VARIANT="${variant}" exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1
 
     cell_log=$(ls -t "${v_root}/logs/${project}"/*.log 2>/dev/null | head -1 || true)
     result=$(classify_log "${cell_log}")
     btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
-    project_dir="${root}/${MAVEN_PROJECTS_DIR}/${project}"
-    head_commit=$(git -C "${project_dir}" rev-parse --short HEAD 2>/dev/null || echo "")
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
     cell_file="${v_root}/cells/${project}.json"
@@ -119,13 +126,13 @@ build_variant_column() {
   done
 }
 
-echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over variants)"
+echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over components)"
 
 if [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
-  run_parallel "${PARALLEL_JOBS}" build_variant_column "${matrix_variants[@]}"
+  run_parallel "${PARALLEL_JOBS}" build_component_row "${matrix_projects[@]}"
 else
-  for variant in "${matrix_variants[@]}"; do
-    build_variant_column "${variant}"
+  for project in "${matrix_projects[@]}"; do
+    build_component_row "${project}"
   done
 fi
 
