@@ -1,0 +1,153 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compat-drift - diff our compat matrix against the upstream plugins-maven4.md.
+#
+# SYNOPSIS
+#   compat-drift
+#
+# DESCRIPTION
+#   Fetches Hervé's hand-run upstream matrix
+#   (apache/maven-dist-tool: src/site/markdown/plugins-maven4.md), parses both
+#   it and our variants/*/cells/*.json into (plugin, maven-version) -> status,
+#   and emits reports/compat-drift.md listing only the cells where ours differs
+#   from upstream, tagged:
+#     upstream-stale         we say ok, upstream says fail (likely a merged fix
+#                            upstream hasn't re-run yet)
+#     we-stale-or-regressed  we say fail, upstream says ok (our env or a fresh
+#                            regression -- investigate)
+#     mismatch               any other ours != upstream pair
+#   plus a coverage summary (cells present in only one matrix, e.g. because of
+#   a version-string mismatch such as our 3.9.16 vs upstream's 3.9.15).
+#
+#   No builds: reads result files + one HTTP GET. Pure analysis.
+#
+# ENVIRONMENT
+#   UPSTREAM_URL   raw URL of plugins-maven4.md (default: dist-tool master).
+#   UPSTREAM_FILE  use a local file instead of fetching (offline / testing).
+
+dir=$(dirname "${0}")
+root=$(readlink -f "${dir}/..")
+
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for compat-drift" >&2; exit 1; }
+
+: "${UPSTREAM_URL:=https://raw.githubusercontent.com/apache/maven-dist-tool/master/src/site/markdown/plugins-maven4.md}"
+
+work=$(mktemp -d -t "compat-drift.XXXXXX")
+trap 'rm -rf "${work}"' EXIT
+
+# --- upstream source ------------------------------------------------------
+upstream_md="${UPSTREAM_FILE:-}"
+if [[ -z "${upstream_md}" ]]; then
+  upstream_md="${work}/upstream.md"
+  curl -fsSL "${UPSTREAM_URL}" -o "${upstream_md}" \
+    || { echo "ERROR: cannot fetch upstream matrix from ${UPSTREAM_URL}" >&2; exit 1; }
+fi
+
+# --- parse upstream -> TSV: plugin \t version \t status -------------------
+awk '
+  function status(cell) {
+    if (cell ~ /white_check_mark/) return "ok"
+    if (cell ~ /:x:/)              return "fail"
+    if (cell ~ /warning/)          return "warn"
+    return ""
+  }
+  /^##[ ]/ { have=0; next }                      # new category resets columns
+  /^\|/ {
+    if ($0 ~ /^\|[ |:-]*$/ && $0 ~ /-/) next     # markdown separator row
+    n = split($0, f, "|")
+    # header row: no plugin link, no icons, but carries version tokens
+    if (!have && f[2] !~ /\[/ && $0 !~ /white_check_mark|:x:|warning/ && $0 ~ /[0-9]+\.[0-9]/) {
+      for (i = 3; i < n; i++) { v = f[i]; gsub(/^[ \t]+|[ \t]+$/, "", v); ver[i] = v }
+      have = 1; next
+    }
+    # data row: first cell holds a [plugin](url) link
+    if (have && f[2] ~ /\[/) {
+      name = f[2]; sub(/.*\[/, "", name); sub(/\].*/, "", name)
+      gsub(/^[ \t]+|[ \t]+$/, "", name)
+      for (i = 3; i < n; i++) {
+        s = status(f[i])
+        if (s != "" && ver[i] != "") print name "\t" ver[i] "\t" s
+      }
+    }
+  }
+' "${upstream_md}" | sort -u > "${work}/upstream.tsv"
+
+# --- parse our cells -> TSV: plugin \t version \t status ------------------
+: > "${work}/ours.tsv"
+while IFS= read -r cf; do
+  [[ -r "${cf}" ]] || continue
+  st=$(jq -r '.status // empty' "${cf}")
+  ver=$(jq -r '.mvn_version // empty' "${cf}")
+  [[ -n "${st}" && -n "${ver}" ]] || continue
+  rel="${cf#*/cells/}"; proj="${rel%.json}"; plugin="${proj##*/}"
+  printf '%s\t%s\t%s\n' "${plugin}" "${ver}" "${st}" >> "${work}/ours.tsv"
+done < <(find "${root}/variants" -path '*/cells/*.json' 2>/dev/null || true)
+sort -u "${work}/ours.tsv" -o "${work}/ours.tsv"
+
+# --- compare --------------------------------------------------------------
+# drift.tsv columns: plugin \t version \t ours \t upstream \t tag
+awk -F'\t' '
+  NR==FNR { up[$1 SUBSEP $2] = $3; next }
+  {
+    key = $1 SUBSEP $2; ours = $3
+    if (key in up) {
+      if (up[key] != ours) {
+        if (ours=="ok" && up[key]=="fail")        tag = "upstream-stale"
+        else if (ours=="fail" && up[key]=="ok")   tag = "we-stale-or-regressed"
+        else                                      tag = "mismatch"
+        print $1 "\t" $2 "\t" ours "\t" up[key] "\t" tag
+      }
+      delete up[key]
+    } else {
+      print $1 "\t" $2 "\t" ours "\t" "-" "\t" "ours-only"
+    }
+  }
+  END {
+    for (k in up) { split(k, a, SUBSEP); print a[1] "\t" a[2] "\t" "-" "\t" up[k] "\t" "upstream-only" }
+  }
+' "${work}/upstream.tsv" "${work}/ours.tsv" > "${work}/drift.tsv"
+
+# --- render ---------------------------------------------------------------
+mkdir -p "${root}/reports"
+out="${root}/reports/compat-drift.md"
+
+mismatches=$(grep -cE 'upstream-stale|we-stale-or-regressed|mismatch$' "${work}/drift.tsv" || true)
+ours_only=$(grep -c 'ours-only$' "${work}/drift.tsv" || true)
+upstream_only=$(grep -c 'upstream-only$' "${work}/drift.tsv" || true)
+
+{
+  echo "# Compat-Matrix Drift vs upstream plugins-maven4.md"
+  echo
+  echo "_Generated $(date -u +%Y-%m-%dT%H:%M:%SZ). Upstream: ${UPSTREAM_FILE:-${UPSTREAM_URL}}_"
+  echo
+  echo "Status mismatches: **${mismatches}** · ours-only: ${ours_only} · upstream-only: ${upstream_only}"
+  echo
+
+  echo "## Status mismatches (ours ≠ upstream)"
+  echo
+  if [[ "${mismatches}" -eq 0 ]]; then
+    echo "_None — every shared (plugin, version) cell agrees._"
+  else
+    echo "| Plugin | Maven | Ours | Upstream | Tag |"
+    echo "|---|---|---|---|---|"
+    grep -E 'upstream-stale|we-stale-or-regressed|mismatch$' "${work}/drift.tsv" \
+      | sort \
+      | awk -F'\t' '{printf "| `%s` | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5}'
+  fi
+  echo
+  echo "Tags: \`upstream-stale\` = we ok / upstream fail (likely a merged fix not re-run upstream) ·"
+  echo "\`we-stale-or-regressed\` = we fail / upstream ok (check our env or a regression) ·"
+  echo "\`mismatch\` = any other disagreement."
+  echo
+  echo "## Coverage (cells in only one matrix)"
+  echo
+  echo "These are not disagreements but gaps -- often a version-string mismatch"
+  echo "(e.g. our \`3.9.16\` vs upstream's \`3.9.15\`) or plugins we did not run."
+  echo
+  echo "- ours-only: ${ours_only}"
+  echo "- upstream-only: ${upstream_only}"
+} > "${out}"
+
+echo "Wrote ${out} (${mismatches} mismatch(es), ${ours_only} ours-only, ${upstream_only} upstream-only)."
