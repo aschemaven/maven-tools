@@ -14,3 +14,16 @@
 # a test failure (which the retry mechanism can then ride over) rather
 # than an infinite stall that requires manual kill -9.
 misc/wagon -Dsurefire.timeout=600
+
+# Maven core IT suites (its/core-it-suite) spawn sub-Maven processes
+# from each IT. Sub-mvns regularly hang (Develocity extension issues,
+# OOM in inner forks, Jetty test servers not shutting down, ...) and
+# Surefire has no fork timeout configured. Result: the outer mvn waits
+# forever for a fork that will never complete. Cap surefire forks at
+# 10 minutes so a stuck IT becomes a measurable failure instead of an
+# overnight stall (observed: core/maven-4.0.x hung 13h after a
+# MavenITmng6759 OOM in a sub-fork during RC-6 prep).
+core/maven-4.0.x -Dsurefire.timeout=600
+core/3.x/its-3 -Dsurefire.timeout=600
+core/3.x/mvnd-1 -Dsurefire.timeout=600
+core/mvnd -Dsurefire.timeout=600
