@@ -651,7 +651,7 @@ exec_mvn() {
     max_retries=$(get_flaky_retry_count "${project}")
   fi
 
-  logs="${v_logroot}/${project}/${task}-$$-${counter}.log"
+  logs="${v_logroot}/${project}/${run_ts:-$(date +%y%m%d-%H%M)}-${task}-$$-${counter}.log"
   echo -n "${project} (${counter}/${noof_projects}), a Maven project ${mvn_info}, build (logs: '${logs}') "
   set +e
   local attempt=0

@@ -87,7 +87,16 @@ trap '/bin/rm -rf "${tmpdir}"' EXIT
 export TMPDIR="${tmpdir}"
 
 mkdir -p "${root}/logs"
-overall_log="${root}/logs/run-maven-${goals// /-}-$$.log"
+# Timestamp shared by the overall log and all per-project logs (so they
+# can be cross-referenced at a glance). PIDs are not unique long-term as
+# the OS reuses them; the YYMMDD-HHMM prefix sorts chronologically in ls
+# and resolves the ambiguity. The PID stays in the filename as a
+# tiebreaker for sub-minute parallel runs.
+# Plain shell variable -- exec_mvn runs in the same shell (either inline
+# or as a background job via run_parallel, both inherit non-exported
+# vars); the mvn subprocess does not care about run_ts.
+run_ts=$(date +%y%m%d-%H%M)
+overall_log="${root}/logs/run-maven-${run_ts}-${goals// /-}-$$.log"
 
 # Individual build failures are handled by exec_mvn (logged + reported).
 # The loop must not propagate those failures to the script exit code.
