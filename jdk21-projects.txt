@@ -1,0 +1,26 @@
+# Projects whose source code or build environment requires Java 21+ while
+# the rest of the reactor runs on a lower JDK (typically 17 for Maven 4 core
+# compatibility -- the Maven 4 CI matrix is ['17', '21', '25']).
+#
+# For listed projects, exec_mvn sets JAVA_HOME to ${JDK21_HOME} (default
+# ~/.sdkman/candidates/java/21.0.10-tem; override via env). One project per
+# line. Comments starting with `#` and blank lines are ignored.
+#
+# Override the whole list at runtime with JDK21_PROJECTS="..." (or set
+# JDK21_PROJECTS="" to disable per-project overrides entirely).
+#
+# Background and analysis:
+#   maven-bugfixing/queue/enforcer-java-21-vs-ci-matrix-2026-06-21.adoc
+
+# Source uses java.net.http.HttpClient in try-with-resources -- HttpClient
+# only implements AutoCloseable from JDK 21 (JDK-8304165). Slawek bumped
+# the project to Java 21 in commit ea72221 (2024-10-31, "internally used
+# project so we can use the newer JDK"), so this is intentional.
+misc/dist-tool
+
+# Build enforces [21,) on minimalJavaBuildVersion (pom.xml:123, introduced
+# by Tamas Cservenak in commit d96c0848 of PR #398 alongside MRESOLVER-455).
+# The source itself compiles on JDK 17 without changes (verified 2026-06-21:
+# 537 goals, 534 executed BUILD SUCCESS with -Denforcer.skip=true), but the
+# enforcer pin stands until upstream relaxes it.
+core/resolver

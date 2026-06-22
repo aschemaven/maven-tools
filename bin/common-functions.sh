@@ -310,6 +310,18 @@ if [[ -z "${LRM_SPLIT_SKIP_PROJECTS+x}" ]]; then
   LRM_SPLIT_SKIP_PROJECTS=$(read_project_list_file "${root}/lrm-split-skip-projects.txt")
 fi
 
+# Load default JDK21_PROJECTS from jdk21-projects.txt. Projects on this list
+# get JAVA_HOME pointed at a Java 21 SDKman candidate (configurable via the
+# JDK21_HOME env var, default: ~/.sdkman/candidates/java/21.0.10-tem). Used
+# for the small set of projects whose source code requires Java 21 while the
+# rest of the reactor runs on a lower JDK -- e.g. misc/dist-tool depends on
+# HttpClient.AutoCloseable (JDK 21 source feature), and core/resolver
+# enforces [21,) on its build environment regardless of bytecode target.
+if [[ -z "${JDK21_PROJECTS+x}" ]]; then
+  JDK21_PROJECTS=$(read_project_list_file "${root}/jdk21-projects.txt")
+fi
+: "${JDK21_HOME:=${HOME}/.sdkman/candidates/java/21.0.10-tem}"
+
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS
 # value -- explicit override via EXCLUDE_PROJECTS="" disables filtering.
@@ -609,6 +621,18 @@ exec_mvn() {
     opts="${opts} ${extra_args}"
   fi
 
+  # Per-project JDK21 override (independent of variant mechanism). For the
+  # handful of projects whose source code or build enforcement requires
+  # Java 21 while the rest of the reactor runs on a lower JDK.
+  local proj_javahome=""
+  for j21p in ${JDK21_PROJECTS:-}; do
+    if [[ "${project}" == "${j21p}" ]]; then
+      proj_javahome="${JDK21_HOME}"
+      ext="${ext} (JDK 21)"
+      break
+    fi
+  done
+
   mvn_info=""
   if [[ -n "${variant}" ]]; then
     # Variant runs use the variant's Maven, deliberately ignoring any project
@@ -665,6 +689,7 @@ exec_mvn() {
     (
       cd "${project_dir}"
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
+      [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
       # shellcheck disable=SC2086
       ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
     ) > "${current_logs}"
