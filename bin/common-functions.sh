@@ -147,6 +147,10 @@ select_mvn() {
 # shellcheck disable=SC2034 disable=SC2154
 # root is used in other scripts, dir is injected by the caller
 root=$(readlink -f "${dir}/..")
+# Central cache base for Maven local repos (.m2, .m2-isolated).
+# Defaults to the repo root (unchanged behaviour); set MAVEN_TOOLS_CACHE
+# (e.g. ~/wrk/maven via direnv) to share caches across worktrees.
+: "${MAVEN_TOOLS_CACHE:=${root}}"
 [[ -z "${PROJECTS:-}" ]] && PROJECTS="$(cat "${root}/${MAVEN_PROJECTS_DIR}/.repo/project.list" 2>/dev/null || true)"
 
 # Read non-comment, non-blank lines from a file as a space-separated list.
@@ -351,7 +355,7 @@ counter=0
 # Only set maven.repo.local if not already configured in MAVEN_OPTS
 MAVEN_REPO_LOCAL_OPT=""
 if [[ ! "${MAVEN_OPTS:-}" =~ maven.repo.local ]]; then
-  MAVEN_REPO_LOCAL_OPT="-Dmaven.repo.local=${root}/.m2/repository"
+  MAVEN_REPO_LOCAL_OPT="-Dmaven.repo.local=${MAVEN_TOOLS_CACHE}/.m2/repository"
 fi
 
 # Enable Maven Resolver's Enhanced LRM split mode (resolver 1.9+ / 2.x).
@@ -491,7 +495,7 @@ exec_mvn() {
   local variant="${VARIANT:-}"
   local v_logroot="${root}/logs"
   local v_settings="${SETTINGS}"
-  local v_iso_root="${root}/.m2-isolated"
+  local v_iso_root="${MAVEN_TOOLS_CACHE}/.m2-isolated"
   local v_repo=""            # empty => keep the caller-provided maven.repo.local
   local v_javahome=""
   if [[ -n "${variant}" ]]; then

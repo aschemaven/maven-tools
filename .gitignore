@@ -14,3 +14,7 @@ tmp/
 variants/
 reports/
 maven-4x/
+# jQA github-plugin cache (symlink to shared ~/wrk/maven/.github-cache)
+.github-cache
+# local Develocity config of maven-tools itself (not committed)
+.mvn/
