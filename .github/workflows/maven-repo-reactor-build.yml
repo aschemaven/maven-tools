@@ -1,10 +1,12 @@
 name: Run Maven build of all components
 
 on:
-  schedule:
-    # only runs on the main branch (see below)
-    - cron: '0 21 * * *'
-  push:
+  # Disabled for now: the full reactor build exceeds the Actions timeout
+  # and never finishes. Re-enable by uncommenting. Revisit later.
+  # schedule:
+  #   # only runs on the main branch (see below)
+  #   - cron: '0 21 * * *'
+  # push:
   workflow_dispatch:
     inputs:
       branch:
