@@ -4,7 +4,11 @@ maven
 # Our stuff
 .envrc*
 .sdkmanrc
+# jQAssistant stores: embedded work stores, the blue/green publication slots
+# and the writable scratch instance. All regenerable, tens of GB.
 jqassistant/store*
+jqassistant/publish/
+jqassistant/scratch/
 logs/*
 *.log
 target/
@@ -12,9 +16,29 @@ target/
 # (variants.txt the descriptor stays tracked; the variants/ dir does not)
 tmp/
 variants/
+# Regenerable snapshots -- safe to delete at any time. The append-only time
+# series live in metrics/ (tracked) and the scheduler state in var/ (ignored),
+# so wiping reports/ costs nothing.
 reports/
+# Scheduler state: last-seen refs and last-run status. Regenerable -- losing it
+# just makes the next nightly build every project once.
+var/
 maven-4x/
 # jQA github-plugin cache (symlink to shared ~/wrk/maven/.github-cache)
 .github-cache
+# Maven local repositories belong under MAVEN_TOOLS_CACHE (~/wrk/maven), see
+# common-functions.sh. These only appear here when MAVEN_TOOLS_CACHE is unset --
+# which happened while the direnv chain was broken. Ignored as a safety net so a
+# stray 6 GB repo can never be staged by accident.
+.m2/
+.m2-isolated/
+# Locks of jqa-nightly / jqa-publish
+.jqa-nightly.lock
+.github-cache.lock
 # local Develocity config of maven-tools itself (not committed)
 .mvn/
+
+# Documentation toolchain (Antora + Kroki); diagrams are rendered, not committed
+node_modules/
+build/
+.cache/
