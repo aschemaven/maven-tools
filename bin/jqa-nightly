@@ -1,0 +1,354 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# jqa-nightly - unattended graph refresh, driven by what actually changed.
+#
+# SYNOPSIS
+#     jqa-nightly [--incremental] [--force] [--dry-run]
+#
+# DESCRIPTION
+#     One scheduled cycle:
+#
+#       0. sync the repo manifest (apache/maven-sources) -- projects get added,
+#          renamed and retired upstream, so the corpus itself must be refreshed
+#          before anything is fetched or built
+#       1. fetch all repositories (cheap, always) and record their HEADs
+#       2. diff against the previous run  ->  list of CHANGED projects
+#       3. build   only changed projects  (skipped entirely when nothing moved)
+#       4. scan    ALL projects, always -- see below
+#       5. github  always -- issues, PRs and comments change without any commit
+#       6. analyze always
+#       7. on success only: publish the store (stage -> verify -> switch)
+#       8. verify the GitHub part against the API's own totalCount
+#
+#     Written is ALWAYS an offline store, never the served database. A run that
+#     fails halfway therefore cannot leave the served graph half-updated, readers
+#     never see a partial state, and the previous generation stays available for
+#     rollback. Publication is the only step that makes anything visible, and it
+#     happens after verification.
+#
+#     Rationale for "no build if nothing changed": a fetch costs ~1 minute, a
+#     build ~50. Most nights only a handful of the repositories move, and
+#     building the other ~120 reproduces byte-identical output.
+#
+#     SCANNING, however, is NOT restricted to changed projects. The graph should
+#     reflect the current state of everything, not just of what happened to be
+#     rebuilt: a project whose sources did not move can still have new commits
+#     on other branches, new tags, or a moved HEAD. Scanning reads the local
+#     clone and the caches, so the marginal cost of covering everything is low
+#     compared to the risk of a graph that is quietly partial.
+#
+#     Steps 5 and 6 likewise run unconditionally: issues, pull requests and
+#     comments change without any commit at all.
+#
+# MODES
+#   default        rebuild: a NEW dated store, everything scanned into it.
+#                  Correct by construction -- nothing deleted upstream survives,
+#                  and a fresh store knows no scanned URIs, so the GitHub phase
+#                  cannot silently no-op (see below).
+#   --incremental  extend the maintained work store instead. Faster for the scan
+#                  phase, but the graph drifts and the GitHub phase does nothing.
+#                  Useful for a quick partial refresh, not for scheduled runs.
+#   --force        build even when no repository changed.
+#   --dry-run      report what would happen, change nothing.
+#
+# WHY A FULL REBUILD EVERY NIGHT
+#   Refreshing GitHub data in an EXISTING store is not cheap-but-incremental --
+#   it does nothing at all. jQAssistant records scanned URIs and skips them with
+#   a DEBUG-level message, ending in BUILD SUCCESS after a few seconds. Making it
+#   work would mean deleting the GitHub:Repository nodes first, and the scan then
+#   costs its full ~199 minutes anyway; the delete comes on top, and deleting
+#   ~100k nodes with their relationships inside Neo4j is far slower than dropping
+#   a directory.
+#
+#   A rebuild therefore costs no more than a corrected incremental run, and it
+#   additionally removes drift: branches, tags and pull requests deleted upstream
+#   simply never appear. Cost is disk (~5.5 GB per store, see KEEP_STORES) and
+#   roughly four to five hours per night, dominated by the GitHub phase.
+#
+# COVERAGE CHECK
+#   After promotion the GitHub subgraph is compared against GitHub's totalCount
+#   (jqa-verify-github). A scan can report BUILD SUCCESS while importing almost
+#   nothing -- the plugin only fetches items newer than `lastScanAt`, so a cache
+#   that started out partial stays partial silently. This is deliberately NOT
+#   fatal: the graph is still usable, so the run promotes and notifies rather
+#   than discarding a night's work. Set VERIFY_GITHUB=false to skip.
+#
+# NOTIFICATION
+#   On failure: macOS notification (terminal-notifier or osascript) plus, when
+#   NIGHTLY_MAIL is set, a mail with the failing stage and log path. A status
+#   file is always written to var/nightly-status.txt so a scheduler or a
+#   later run can see the outcome without parsing logs.
+#
+# ENVIRONMENT
+#   NIGHTLY_MAIL     recipient for failure mails (optional)
+#   WORK_STORE_SUFFIX  suffix of the incremental work store (default -work)
+#   SCAN_CHANGED_ONLY  true to scan only changed projects (default false: scan all)
+#   PUBLISH            false to skip publication (build only)
+#   VERIFY_BOLT        published instance to verify (default bolt://localhost:7688)
+#   JQA_MVN_VERSION  Maven for the jQAssistant stages (default 3.9.16)
+#   KEEP_STORES      how many dated stores to keep (default 3)
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+cd "${root}" || exit 1
+
+: "${JQA_MVN_VERSION:=3.9.16}"
+: "${KEEP_STORES:=3}"
+: "${NIGHTLY_MAIL:=}"
+
+rebuild=true; force=false; dry=false
+for a in "$@"; do
+  case "${a}" in
+    --incremental) rebuild=false ;;
+    --force) force=true ;;
+    --dry-run) dry=true ;;
+    *) echo "unknown option: ${a}" >&2; exit 1 ;;
+  esac
+done
+
+state_dir="${root}/var"; mkdir -p "${state_dir}"
+heads_prev="${state_dir}/nightly-heads.tsv"
+heads_cur="${state_dir}/nightly-heads.current"
+status_file="${state_dir}/nightly-status.txt"
+stamp() { date '+%F %T'; }
+
+# --- single instance ------------------------------------------------------
+lock="${root}/.jqa-nightly.lock"
+if ! mkdir "${lock}" 2>/dev/null; then
+  echo "[$(stamp)] another jqa-nightly is running (${lock}); exiting" >&2
+  exit 0
+fi
+trap 'rm -rf "${lock}"' EXIT
+
+# --- notification ---------------------------------------------------------
+notify_failure() {
+  local stage="$1" logdir="$2"
+  local title="jQA nightly FAILED: ${stage}"
+  local msg="host $(hostname -s), see ${logdir}"
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    terminal-notifier -title "${title}" -message "${msg}" >/dev/null 2>&1 || true
+  elif command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"${msg}\" with title \"${title}\"" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${NIGHTLY_MAIL}" ]] && command -v mail >/dev/null 2>&1; then
+    printf 'Stage: %s\nHost: %s\nLogs: %s\nTime: %s\n' \
+      "${stage}" "$(hostname -s)" "${logdir}" "$(stamp)" \
+      | mail -s "${title}" "${NIGHTLY_MAIL}" 2>/dev/null || true
+  fi
+}
+
+finish() {
+  local result="$1" stage="$2" logdir="$3"
+  printf '%s\t%s\t%s\t%s\n' "$(stamp)" "${result}" "${stage}" "${logdir}" > "${status_file}"
+  if [[ "${result}" != "OK" ]]; then
+    notify_failure "${stage}" "${logdir}"
+    echo "[$(stamp)] FAILED at ${stage}; logs: ${logdir}" >&2
+    exit 1
+  fi
+  echo "[$(stamp)] OK (${stage}); logs: ${logdir}"
+}
+
+# --- 0. manifest sync -----------------------------------------------------
+# The project list is not ours: apache/maven-sources adds, renames and retires
+# repositories. Building against a stale manifest silently scans a corpus that
+# no longer matches upstream -- and lets projects that were retired months ago
+# linger in the graph. Sync first, then read PROJECTS.
+# run-maven injects .mvn/develocity.xml and .mvn/extensions.xml into every
+# project it builds. `repo sync` then refuses to REMOVE a project ("Cannot
+# remove project: uncommitted changes are present") and aborts the whole
+# synchronisation as soon as a repository is retired upstream. Observed on
+# 2026-09-10: three attempts needed.
+#
+# Only files that are BYTE-IDENTICAL to the template under develocity/ are
+# removed; a project's own .mvn/extensions.xml is left alone. Deliberately over
+# the whole tree rather than over PROJECTS: the blocking projects are exactly
+# those disappearing from the manifest, so they are no longer in PROJECTS.
+clean_injected_mvn() {
+  local repo_dir="$1" removed=0 f tmpl own d
+  for f in develocity.xml extensions.xml; do
+    tmpl="${root}/develocity/${f}"
+    [[ -r "${tmpl}" ]] || continue
+    while IFS= read -r own; do
+      [[ -f "${own}" ]] || continue
+      if cmp -s "${own}" "${tmpl}"; then
+        rm -f "${own}"; removed=$((removed + 1))
+      fi
+    done < <(find "${repo_dir}" -type d -name .repo -prune -o -path "*/.mvn/${f}" -print 2>/dev/null)
+  done
+  # clean up .mvn directories that became empty, they would still block
+  while IFS= read -r d; do rmdir "${d}" 2>/dev/null || true; done \
+    < <(find "${repo_dir}" -type d -name .repo -prune -o -type d -name .mvn -print 2>/dev/null)
+  [[ "${removed}" -gt 0 ]] && echo "[$(stamp)] ${removed} injected .mvn file(s) removed before sync"
+  return 0
+}
+
+sync_manifest() {
+  local repo_dir="${root}/${MAVEN_PROJECTS_DIR:-maven}"
+  [[ -d "${repo_dir}/.repo" ]] || { echo "[$(stamp)] no .repo tree -- skipping manifest sync"; return 0; }
+  command -v repo >/dev/null 2>&1 || { echo "[$(stamp)] 'repo' not on PATH -- skipping manifest sync" >&2; return 0; }
+  clean_injected_mvn "${repo_dir}"
+  local before after
+  before=$(git -C "${repo_dir}/.repo/manifests" rev-parse --short HEAD 2>/dev/null || echo '?')
+  ( cd "${repo_dir}" && repo sync -q --no-clone-bundle -j8 ) || return 1
+  after=$(git -C "${repo_dir}/.repo/manifests" rev-parse --short HEAD 2>/dev/null || echo '?')
+  if [[ "${before}" != "${after}" ]]; then
+    echo "[$(stamp)] manifest ${before} -> ${after}"
+    git -C "${repo_dir}/.repo/manifests" diff --stat "${before}..${after}" -- default.xml 2>/dev/null | tail -1
+  else
+    echo "[$(stamp)] manifest unchanged (${after})"
+  fi
+  return 0
+}
+
+if [[ "${dry}" == "true" ]]; then
+  echo "[dry-run] would run 'repo sync'"
+else
+  sync_manifest || finish FAILED manifest-sync "${state_dir}"
+fi
+
+# --- 1. fetch + record HEADs ---------------------------------------------
+# Sourced AFTER the manifest sync: PROJECTS is read from .repo/project.list,
+# which the sync may have changed.
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+maven_dir="${root}/${MAVEN_PROJECTS_DIR}"
+
+echo "[$(stamp)] fetching $(echo "${PROJECTS}" | wc -w | tr -d ' ') repositories"
+if [[ "${dry}" != "true" ]]; then
+  echo "${PROJECTS}" | tr ' ' '\n' | grep -v '^$' \
+    | xargs -P 8 -I{} bash -c 'git -C "'"${maven_dir}"'/{}" fetch --all --prune --tags --quiet 2>/dev/null || true'
+fi
+
+: > "${heads_cur}"
+for p in ${PROJECTS}; do
+  [[ -e "${maven_dir}/${p}/.git" ]] || continue
+  # All remote HEADs, not just the checked-out branch: the GitHub scan resolves
+  # branch HEADs from the graph, so any moved remote ref is relevant.
+  h=$(git -C "${maven_dir}/${p}" for-each-ref --format='%(objectname)' refs/remotes 2>/dev/null | sort | shasum | cut -d' ' -f1)
+  printf '%s\t%s\n' "${p}" "${h}" >> "${heads_cur}"
+done
+sort -o "${heads_cur}" "${heads_cur}"
+
+prev="${heads_prev}"; [[ -r "${prev}" ]] || prev=/dev/null
+changed=$(awk -F'\t' -v prevf="${prev}" '
+  FILENAME == prevf { old[$1] = $2; next }
+  (!($1 in old) || old[$1] != $2) { print $1 }
+' "${prev}" "${heads_cur}" | tr '\n' ' ')
+changed="${changed% }"
+n_changed=$(echo "${changed}" | wc -w | tr -d ' ')
+
+echo "[$(stamp)] changed repositories: ${n_changed}"
+[[ "${n_changed}" -gt 0 && "${n_changed}" -le 15 ]] && echo "    ${changed}"
+
+if [[ "${dry}" == "true" ]]; then
+  echo "[dry-run] mode=$([[ ${rebuild} == true ]] && echo rebuild || echo incremental) force=${force}; would build/scan: ${changed:-<nothing>}"
+  exit 0
+fi
+
+# --- store selection ------------------------------------------------------
+# Two deliberately different targets:
+#
+#   incremental -> writes DIRECTLY into the served Neo4j over Bolt. Small,
+#                  frequent updates become visible immediately, there is no
+#                  5 GB copy per run, and the coverage check afterwards sees
+#                  exactly what was just written.
+#   rebuild     -> writes a NEW embedded store and promotes it atomically.
+#                  Neo4j Community serves a single database, so rebuilding in
+#                  place would leave the served graph incomplete for hours;
+#                  building beside it and swapping keeps the old one queryable
+#                  until the moment it is replaced.
+# Both modes write to an OFFLINE store. The only difference is whether the
+# maintained work store is extended incrementally or a new one is built.
+unset JQA_STORE_URI
+if [[ "${rebuild}" == "true" ]]; then
+  export JQA_STORE_SUFFIX="-$(date '+%Y%m%d-%H%M')"
+  scan_projects=""                     # empty -> all projects
+  echo "[$(stamp)] rebuild into jqassistant/store${JQA_STORE_SUFFIX}"
+else
+  export JQA_STORE_SUFFIX="${WORK_STORE_SUFFIX:--work}"
+  [[ -d "${root}/jqassistant/store${JQA_STORE_SUFFIX}" ]] \
+    || echo "[$(stamp)] work store does not exist yet -- first run builds it from scratch"
+  # Deliberately NOT "${changed}": scan everything so the graph is current.
+  # SCAN_CHANGED_ONLY=true restores the narrow behaviour for a quick run.
+  if [[ "${SCAN_CHANGED_ONLY:-false}" == "true" ]]; then
+    scan_projects="${changed}"
+    echo "[$(stamp)] incremental into jqassistant/store${JQA_STORE_SUFFIX} (only changed projects)"
+  else
+    scan_projects=""
+    echo "[$(stamp)] incremental into jqassistant/store${JQA_STORE_SUFFIX} (scanning all projects)"
+  fi
+fi
+store_dir="${root}/jqassistant/store${JQA_STORE_SUFFIX}"
+
+logdir=""
+run_stage() {                          # run_stage <stage> [PROJECTS]
+  local stage="$1"; local projects="${2-}"
+  local out
+  if [[ -n "${projects}" ]]; then
+    PROJECTS="${projects}" JQA_MVN_VERSION="${JQA_MVN_VERSION}" ./bin/run-jqa-cycle "${stage}" >/dev/null
+  else
+    JQA_MVN_VERSION="${JQA_MVN_VERSION}" ./bin/run-jqa-cycle "${stage}" >/dev/null
+  fi
+  out=$(ls -1dt logs/jqa-cycle-* | head -1)
+  logdir="${out}"
+  grep -qE "END +${stage} +rc=0" "${out}/timing.txt" 2>/dev/null
+}
+
+# --- 2. build (only what moved) ------------------------------------------
+# Building and scanning are decided independently.
+#
+#   build  only what changed. A rebuild of the STORE does not imply a rebuild of
+#          the ARTEFACTS: the scan reads target/, which survives between runs.
+#          Tying the two together would rebuild all ~125 projects every night for
+#          no gain.
+#   scan   everything, always (see the store selection above).
+if [[ "${n_changed}" -eq 0 && "${force}" != "true" ]]; then
+  echo "[$(stamp)] nothing changed -- skipping build"
+else
+  build_projects="${changed}"
+  [[ "${force}" == "true" ]] && build_projects=""
+  run_stage build "${build_projects}" || finish FAILED build "${logdir}"
+fi
+run_stage scan "${scan_projects}" || finish FAILED scan "${logdir}"
+
+# --- 3. GitHub + analyze always ------------------------------------------
+run_stage github  || finish FAILED github  "${logdir}"
+run_stage analyze || finish FAILED analyze "${logdir}"
+
+# --- 4. publish -----------------------------------------------------------
+# stage -> verify -> switch. Only the switch makes the new state visible; if a
+# step fails, the previous version stays online unchanged.
+if [[ "${PUBLISH:-true}" == "true" ]]; then
+  ./bin/jqa-publish run "${store_dir}" || finish FAILED publish "${logdir}"
+fi
+
+if [[ "${rebuild}" == "true" ]]; then
+  ls -1dt jqassistant/store-20* 2>/dev/null | tail -n +$((KEEP_STORES + 1)) | while read -r old; do
+    echo "[$(stamp)] removing old store ${old}"; rm -rf "${old}"
+  done
+fi
+
+# --- 5. verify coverage against the GitHub API ----------------------------
+# Runs against the published database -- normally the store just promoted, and
+# with --incremental the database that was just written.
+if [[ "${VERIFY_GITHUB:-true}" == "true" ]]; then
+  echo "[$(stamp)] verifying GitHub coverage against the API"
+  if ./bin/jqa-verify-github --bolt "${VERIFY_BOLT:-bolt://localhost:7688}" > "${state_dir}/github-coverage.txt" 2>&1; then
+    grep -E '^(issues|prs|milestones|releases)' "${state_dir}/github-coverage.txt" || true
+  else
+    rc=$?
+    if [[ "${rc}" -eq 1 ]]; then
+      echo "[$(stamp)] WARNING: repositories under-covered -- see ${state_dir}/github-coverage.txt" >&2
+      sed -n '/UNDER-COVERED/,$p' "${state_dir}/github-coverage.txt" | head -12
+      notify_failure "github-coverage" "${state_dir}/github-coverage.txt"
+    else
+      echo "[$(stamp)] coverage check could not run (rc=${rc}) -- skipped" >&2
+    fi
+  fi
+fi
+
+cp -f "${heads_cur}" "${heads_prev}"
+./bin/jqa-timings collect >/dev/null 2>&1 || true
+finish OK complete "${logdir}"

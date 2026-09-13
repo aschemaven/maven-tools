@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for the nightly jQAssistant run.
+
+  Installation (per machine):
+    sed "s#__TOOLS_ROOT__#$PWD#" launchd/net.aschemann.jqa-nightly.plist.template \
+      > ~/Library/LaunchAgents/net.aschemann.jqa-nightly.plist
+    launchctl load ~/Library/LaunchAgents/net.aschemann.jqa-nightly.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/net.aschemann.jqa-nightly.plist
+
+  Run without waiting:
+    launchctl start net.aschemann.jqa-nightly
+
+  WHY /bin/bash -lc AND AN EXPLICIT PATH
+    launchd starts without a login environment. SDKman initialises from
+    ~/.zshrc resp. ~/.bashrc, which are read for INTERACTIVE shells only -- a
+    bare `mvn` fails here. jqa-nightly therefore resolves Maven itself and loads
+    the direnv environment; the PATH below only makes sure direnv, docker, git,
+    gh and repo are found.
+
+  SCHEDULE
+    03:00 daily. Every run rebuilds the graph from scratch into a new dated
+    store and publishes it; KEEP_STORES governs how many are retained. Building
+    is still change-driven -- an unchanged project is not rebuilt, because the
+    scan reads target/ which persists.
+
+    A separate weekly agent used to exist for the rebuild. It is gone: the
+    rebuild is the nightly behaviour now, because refreshing GitHub data in an
+    existing store does not work (jQAssistant skips already-scanned URIs).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>net.aschemann.jqa-nightly</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__TOOLS_ROOT__/bin/jqa-nightly"</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__TOOLS_ROOT__</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>3</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__TOOLS_ROOT__/logs/jqa-nightly.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__TOOLS_ROOT__/logs/jqa-nightly.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>

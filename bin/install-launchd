@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# install-launchd - install (or remove) the scheduled jQAssistant run.
+#
+# SYNOPSIS
+#     install-launchd [install|uninstall|status]
+#
+# DESCRIPTION
+#     Renders launchd/net.aschemann.jqa-nightly.plist.template with this
+#     checkout's path and loads it. The agent runs daily at 03:00 and rebuilds
+#     the graph into a new dated store, then publishes it.
+#
+#     The template is rendered rather than symlinked because launchd needs an
+#     absolute path, and this checkout is a Git worktree whose location differs
+#     per machine.
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+label=net.aschemann.jqa-nightly
+plist="${HOME}/Library/LaunchAgents/${label}.plist"
+template="${root}/launchd/${label}.plist.template"
+
+case "${1:-status}" in
+  install)
+    [[ -r "${template}" ]] || { echo "template missing: ${template}" >&2; exit 1; }
+    mkdir -p "${HOME}/Library/LaunchAgents"
+    launchctl unload "${plist}" 2>/dev/null || true
+    sed "s#__TOOLS_ROOT__#${root}#g" "${template}" > "${plist}"
+    plutil -lint "${plist}" >/dev/null || { echo "rendered plist is invalid" >&2; exit 1; }
+    launchctl load "${plist}"
+    echo "installed: ${plist}"
+    echo "  root:  ${root}"
+    echo "  next:  daily 03:00 -- 'launchctl start ${label}' runs it now"
+    ;;
+  uninstall)
+    launchctl unload "${plist}" 2>/dev/null || true
+    rm -f "${plist}"
+    echo "removed: ${plist}"
+    ;;
+  status)
+    # Capture first: piping into "grep -q" makes grep exit on the first match,
+    # which SIGPIPEs launchctl (141) and trips "set -o pipefail" -- the status
+    # would read "not loaded" even for a loaded agent.
+    entry=$(launchctl list 2>/dev/null | grep "${label}" || true)
+    if [[ -n "${entry}" ]]; then
+      echo "loaded:  ${entry}"
+      echo "  columns: PID Status Label -- Status 0 means the last run exited cleanly"
+    else
+      echo "not loaded"
+    fi
+    [[ -f "${plist}" ]] && echo "plist:   ${plist}" || echo "plist:   not installed"
+    [[ -f "${root}/var/nightly-status.txt" ]] \
+      && echo "last run: $(cat "${root}/var/nightly-status.txt")"
+    ;;
+  *) echo "usage: install-launchd install|uninstall|status" >&2; exit 1 ;;
+esac
