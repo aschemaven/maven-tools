@@ -73,6 +73,14 @@ fi
 #   JQA_VERSION (optional)
 #                Specifies the version of the jQAssistant Maven Plugin to be used (default: see above).
 #
+#   JQA_MVN (optional)
+#                Absolute path to the Maven binary to use. Overrides every other lookup.
+#
+#   JQA_MVN_VERSION (optional)
+#                Maven version to resolve via find_mvn_by_version (SDKman, GitHub
+#                Actions tool-cache, MAVEN_HOMES). Takes precedence over $PATH so
+#                that scheduled runs stay reproducible.
+#
 # NOTES
 #   - The script requires the sourced `common-functions.sh` file to define the `exec_mvn`
 #     function, which handles the Maven execution logic.
@@ -133,6 +141,44 @@ jqa_scan_opts="
 
 jqa="com.buschmais.jqassistant:jqassistant-maven-plugin:${JQA_VERSION}"
 
+# Resolve the Maven binary explicitly. A bare `mvn` relies on $PATH, which is set
+# up by SDKman from ~/.zshrc (zsh) resp. ~/.bashrc (bash) -- both are read for
+# INTERACTIVE shells only. Under launchd, cron or `bash -c` the shell never
+# sources them, so `mvn` is not found. run-maven has the same requirement and
+# solves it via find_mvn_by_version(); we reuse that here.
+resolve_mvn() {
+  local candidate
+
+  if [[ -n "${JQA_MVN:-}" ]]; then
+    [[ -x "${JQA_MVN}" ]] || { echo "JQA_MVN is not executable: ${JQA_MVN}" >&2; exit 1; }
+    echo "${JQA_MVN}"
+    return
+  fi
+
+  # An explicitly pinned version wins over $PATH: scheduled runs should not
+  # silently change Maven when the SDKman default is switched.
+  if [[ -n "${JQA_MVN_VERSION:-}" ]]; then
+    candidate=$(find_mvn_by_version "${JQA_MVN_VERSION}")
+    if [[ -n "${candidate}" ]]; then echo "${candidate}"; return; fi
+    echo "No Maven ${JQA_MVN_VERSION} found (SDKman / RUNNER_TOOL_CACHE / MAVEN_HOMES)" >&2
+    exit 1
+  fi
+
+  if candidate=$(command -v mvn 2>/dev/null); then
+    echo "${candidate}"
+    return
+  fi
+
+  # Non-interactive fallback: the SDKman "current" symlink.
+  candidate="${HOME}/.sdkman/candidates/maven/current/bin/mvn"
+  if [[ -x "${candidate}" ]]; then echo "${candidate}"; return; fi
+
+  echo "No Maven found. Set JQA_MVN or JQA_MVN_VERSION, or put mvn on PATH." >&2
+  exit 1
+}
+
+MVN=$(resolve_mvn)
+
 mkdir -p "${root}/logs"
 # Sanitize arguments for log filename (remove characters invalid in filenames)
 log_suffix="${*// /-}"
@@ -151,12 +197,12 @@ opt="${1}"
   case "${opt}" in
   reset | server | analyze | list-plugins | list-rules | list-constraints | list-queries | report | effective-configuration | effective-rules)
     # shellcheck disable=SC2086
-    mvn -B -s "${SETTINGS}" ${jqa_common_opts} -Djqassistant.analyze.execute-applied-concepts "${jqa}:${opt}" "org.asciidoctor:asciidoctor-maven-plugin:process-asciidoc"
+    "${MVN}" -B -s "${SETTINGS}" ${jqa_common_opts} -Djqassistant.analyze.execute-applied-concepts "${jqa}:${opt}" "org.asciidoctor:asciidoctor-maven-plugin:process-asciidoc"
     ;;
   github)
     jqa_common_github_opts=$(jqa_common_opts "-github")
     # shellcheck disable=SC2086
-    mvn -B -s "${SETTINGS}" ${jqa_common_github_opts} -Djqassistant.scan.reset=false "${jqa}:scan"
+    "${MVN}" -B -s "${SETTINGS}" ${jqa_common_github_opts} -Djqassistant.scan.reset=false "${jqa}:scan"
     ;;
   scan)
     for project in ${PROJECTS}; do
