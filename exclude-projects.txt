@@ -12,3 +12,8 @@ studies/maven-extension-demo
 
 # Legacy SVN-imported tool with stale 1.0-SNAPSHOT dependency.
 svn/repository-tools
+
+# Retired upstream: pom name is "(RETIRED) Doxia Tools :: Book Maven Plugin",
+# final-release/retirement commit 2026-05-25. Not worth chasing to M4-green.
+# (Only this one plugin is retired; the rest of doxia/ stays in the survey.)
+doxia/tools/doxia-book-maven-plugin
