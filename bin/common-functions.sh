@@ -703,6 +703,11 @@ exec_mvn() {
   logs="${v_logroot}/${project}/${run_ts:-$(date +%y%m%d-%H%M)}-${task}-$$-${counter}.log"
   echo -n "${project} (${counter}/${noof_projects}), a Maven project ${mvn_info}, build (logs: '${logs}') "
   set +e
+  # Per-project timing. Stage totals alone cannot distinguish "slower" from
+  # "more projects", and they hide the handful of repositories that dominate a
+  # phase. Recorded together with the 1-minute load average, so a slow run on a
+  # busy machine can be told apart from a genuine regression.
+  local _t0; _t0=$(date +%s)
   local attempt=0
   local current_logs
   while :; do
@@ -729,15 +734,28 @@ exec_mvn() {
   elif [[ ${attempt} -gt 1 ]]; then
     retry_tag=" after ${attempt} retries"
   fi
+  local _elapsed=$(( $(date +%s) - _t0 ))
+  local _load
+  _load=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')
+  local _timings="${root}/metrics/project-timings.tsv"
+  if [[ ! -f "${_timings}" ]]; then
+    mkdir -p "${root}/reports"
+    printf 'ended_at\ttask\tproject\tseconds\tstatus\tload1\tvariant\n' > "${_timings}"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date '+%F %T')" "${task}" "${project}" "${_elapsed}" \
+    "$([[ ${status} -eq 0 ]] && echo ok || echo failed)" "${_load:-}" "${variant:-}" \
+    >> "${_timings}"
+
   if test ${status} -ne 0; then
-    echo "failed${retry_tag}${ext}"
+    echo "failed${retry_tag}${ext} [${_elapsed}s]"
     test "${PREVIEW_LOGLINES:-0}" -gt 0 && tail -"${PREVIEW_LOGLINES}" "${current_logs}"
     if eval "${FAIL_FAST:-false}"; then
       echo "Failing fast and current execution failed with status '${status}'"
       exit ${status}
     fi
   else
-    echo "succeeded${retry_tag}${ext}"
+    echo "succeeded${retry_tag}${ext} [${_elapsed}s]"
   fi
   set -e
 }

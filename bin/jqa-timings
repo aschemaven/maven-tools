@@ -1,0 +1,203 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# jqa-timings - time series of stage durations across runs.
+#
+# SYNOPSIS
+#     jqa-timings collect        # harvest logs/jqa-cycle-*/timing.txt into the history
+#     jqa-timings report [N]     # table of the last N runs (default 15)
+#     jqa-timings stats          # min/median/max per stage over the whole history
+#     jqa-timings csv            # history as CSV on stdout (for plotting)
+#
+# DESCRIPTION
+#     run-jqa-cycle already records START/END and elapsed per stage. This
+#     harvests those into an append-only history so the series survives log
+#     rotation, and renders it per stage (build, scan, github, analyze).
+#
+#     `collect` is idempotent: rows are keyed by run id + stage, so it can run
+#     after every cycle (jqa-nightly does) or be replayed over old logs.
+#
+# HISTORY FORMAT
+#     metrics/jqa-timings.tsv  one row per STAGE
+#         run_id  ended_at  stage  seconds  rc  host  store
+#     metrics/jqa-metrics.tsv  one row per RUN, joinable on run_id
+#         run_id  ended_at  stage  metric  value
+#
+#     Durations alone cannot be compared: a `scan` of 0.1 minutes and one of 57
+#     minutes differ in how many projects they covered, not in speed. The metrics
+#     file records that denominator -- projects scanned, repositories scanned,
+#     API walks, store size -- so a slowdown can be told apart from more work.
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+hist="${root}/metrics/jqa-timings.tsv"
+metrics="${root}/metrics/jqa-metrics.tsv"
+mkdir -p "${root}/reports"
+
+to_seconds() {                      # 55m29s -> 3329 ; 0m11s -> 11
+  local v="$1" m s
+  m=${v%%m*}; s=${v##*m}; s=${s%s}
+  echo $(( 10#${m:-0} * 60 + 10#${s:-0} ))
+}
+
+# Extract per-run metrics from the logs a cycle already writes. Read-only, so it
+# can be replayed over old runs at any time.
+collect_metrics() {
+  local d="$1" run_id="$2" ended="$3"
+  local stage n f t
+  for stage in build scan; do
+    [[ -f "${d}${stage}.log" ]] || continue
+    n=$(grep -cE 'succeeded| failed ' "${d}${stage}.log" 2>/dev/null || echo 0)
+    f=$(grep -cE ' failed ' "${d}${stage}.log" 2>/dev/null || echo 0)
+    # "core/maven (5/125)" -> the denominator is the size of the run
+    t=$(grep -oE '\([0-9]+/[0-9]+\)' "${d}${stage}.log" 2>/dev/null | head -1 | tr -d '()' | cut -d/ -f2)
+    emit "${run_id}" "${ended}" "${stage}" projects_done "${n}"
+    emit "${run_id}" "${ended}" "${stage}" projects_failed "${f}"
+    [[ -n "${t}" ]] && emit "${run_id}" "${ended}" "${stage}" projects_total "${t}"
+  done
+  if [[ -f "${d}github.log" ]]; then
+    emit "${run_id}" "${ended}" github repos_scanned \
+      "$(grep -c 'Scanning repository' "${d}github.log" 2>/dev/null || echo 0)"
+    emit "${run_id}" "${ended}" github api_walks \
+      "$(grep -c 'not in local DB' "${d}github.log" 2>/dev/null || echo 0)"
+    emit "${run_id}" "${ended}" github coverage_warnings \
+      "$(grep -c 'required an API walk' "${d}github.log" 2>/dev/null || echo 0)"
+  fi
+  # Store size, if the store still exists
+  local store_line store_dir
+  store_line=$(grep -m1 '^store=' "${d}timing.txt" 2>/dev/null | cut -d= -f2-)
+  store_dir="${store_line}"
+  if [[ -d "${store_dir}" ]]; then
+    emit "${run_id}" "${ended}" cycle store_kib "$(du -sk "${store_dir}" 2>/dev/null | cut -f1)"
+  fi
+}
+
+emit() {
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "${metrics}"
+}
+
+cmd_collect() {
+  local added=0 d run_id host store
+  [[ -f "${hist}" ]] || printf 'run_id\tended_at\tstage\tseconds\trc\thost\tstore\n' > "${hist}"
+  [[ -f "${metrics}" ]] || printf 'run_id\tended_at\tstage\tmetric\tvalue\n' > "${metrics}"
+  for d in "${root}"/logs/jqa-cycle-*/; do
+    [[ -f "${d}timing.txt" ]] || continue
+    run_id=$(basename "${d}")
+    host=$(grep -m1 '^host=' "${d}timing.txt" | cut -d= -f2)
+    store=$(basename "$(grep -m1 '^store=' "${d}timing.txt" | cut -d= -f2-)")
+    # END-Zeilen: [2026-09-08 11:14:53] END   build    rc=0   elapsed=55m29s
+    while read -r line; do
+      local ended stage rc el secs
+      ended=$(echo "${line}" | sed -n 's/^\[\([^]]*\)\].*/\1/p')
+      stage=$(echo "${line}" | awk '{print $4}')
+      rc=$(echo "${line}"    | sed -n 's/.*rc=\([0-9]*\).*/\1/p')
+      el=$(echo "${line}"    | sed -n 's/.*elapsed=\([0-9]*m[0-9]*s\).*/\1/p')
+      [[ -n "${stage}" && -n "${el}" ]] || continue
+      grep -q "^${run_id}	.*	${stage}	" "${hist}" && continue
+      secs=$(to_seconds "${el}")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${run_id}" "${ended}" "${stage}" "${secs}" "${rc:-?}" "${host:-?}" "${store:-?}" >> "${hist}"
+      added=$((added + 1))
+    done < <(grep -E '^\[.*\] END ' "${d}timing.txt" 2>/dev/null)
+    if ! grep -q "^${run_id}	" "${metrics}" 2>/dev/null; then
+      collect_metrics "${d}" "${run_id}" \
+        "$(grep -E '^\[.*\] END ' "${d}timing.txt" | tail -1 | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
+    fi
+  done
+  echo "collected: ${added} new stage records -> ${hist}"
+}
+
+# Rendering entirely in awk: /bin/bash on macOS is 3.2, so no mapfile and no
+# associative arrays; besides, `read` trips over runs that did not contain all
+# four stages when `set -u` is active.
+cmd_report() {
+  local n="${1:-15}"
+  [[ -f "${hist}" ]] || { echo "no history yet; run 'jqa-timings collect'"; return 1; }
+  printf '%-22s %-19s %9s %9s %10s %9s  %s\n' RUN ENDED BUILD SCAN GITHUB ANALYZE STORE
+  awk -F'\t' -v want="${n}" '
+    function fmt(s, rc) {
+      if (s == "") return "-"
+      return sprintf("%dm%02ds%s", int(s/60), s%60, (rc != "0" ? "!" : ""))
+    }
+    NR > 1 {
+      k = $1
+      if (!(k in seen)) { seen[k] = 1; order[++cnt] = k }
+      ended[k] = $2; store[k] = $7
+      sec[k SUBSEP $3] = $4; rc[k SUBSEP $3] = $5
+    }
+    END {
+      first = (cnt > want ? cnt - want + 1 : 1)
+      for (i = first; i <= cnt; i++) {
+        k = order[i]; k2 = k; sub(/^jqa-cycle-/, "", k2)
+        printf "%-22s %-19s %9s %9s %10s %9s  %s\n", k2, ended[k],
+          fmt(sec[k SUBSEP "build"],   rc[k SUBSEP "build"]),
+          fmt(sec[k SUBSEP "scan"],    rc[k SUBSEP "scan"]),
+          fmt(sec[k SUBSEP "github"],  rc[k SUBSEP "github"]),
+          fmt(sec[k SUBSEP "analyze"], rc[k SUBSEP "analyze"]),
+          store[k]
+      }
+    }' "${hist}"
+  echo
+  echo "  '!' = rc != 0,  '-' = stage did not run in this cycle"
+}
+
+cmd_stats() {
+  [[ -f "${hist}" ]] || { echo "no history yet"; return 1; }
+  awk -F'\t' '
+    function fmt(s) { return sprintf("%dm%02ds", int(s/60), s%60) }
+    NR > 1 && $5 == 0 { c = n[$3] + 1; n[$3] = c; v[$3 SUBSEP c] = $4 }
+    END {
+      printf "%-10s %5s %9s %9s %9s\n", "STAGE", "RUNS", "MIN", "MEDIAN", "MAX"
+      split("build scan github analyze", st, " ")
+      for (j = 1; j <= 4; j++) {
+        s = st[j]; c = n[s]; if (c == 0) continue
+        for (a = 1; a <= c; a++) x[a] = v[s SUBSEP a]
+        for (a = 1; a < c; a++) for (b = a+1; b <= c; b++)
+          if (x[a]+0 > x[b]+0) { t = x[a]; x[a] = x[b]; x[b] = t }
+        printf "%-10s %5d %9s %9s %9s\n", s, c, fmt(x[1]), fmt(x[int((c+1)/2)]), fmt(x[c])
+      }
+    }' "${hist}"
+  echo
+  echo "  successful stages only (rc=0)"
+}
+
+cmd_csv() { [[ -f "${hist}" ]] && tr '\t' ',' < "${hist}"; }
+
+# Durations next to their denominator: the same phase over more projects is not
+# a regression, the same phase over the same projects is.
+cmd_metrics() {
+  [[ -f "${metrics}" ]] || { echo "no metrics yet; run 'jqa-timings collect'"; return 1; }
+  printf '%-22s %-8s %8s %10s %10s %10s\n' RUN STAGE SECONDS PROJECTS FAILED STORE_GiB
+  awk -F'\t' '
+    FILENAME ~ /jqa-timings/ && NR > 1 { sec[$1 SUBSEP $3] = $4 }
+    FILENAME ~ /jqa-metrics/ && FNR > 1 {
+      if ($4 == "projects_done")   done[$1 SUBSEP $3] = $5
+      if ($4 == "projects_failed") fail[$1 SUBSEP $3] = $5
+      if ($4 == "repos_scanned")   done[$1 SUBSEP $3] = $5
+      if ($4 == "store_kib")       store[$1] = $5
+      if (!($1 in seen)) { seen[$1] = 1; order[++n] = $1 }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        k = order[i]; k2 = k; sub(/^jqa-cycle-/, "", k2)
+        split("build scan github analyze", st, " ")
+        for (j = 1; j <= 4; j++) {
+          s = st[j]; if (!((k SUBSEP s) in sec)) continue
+          printf "%-22s %-8s %8d %10s %10s %10s\n", k2, s, sec[k SUBSEP s],
+                 ((k SUBSEP s) in done ? done[k SUBSEP s] : "-"),
+                 ((k SUBSEP s) in fail ? fail[k SUBSEP s] : "-"),
+                 (k in store ? sprintf("%.1f", store[k]/1048576) : "-")
+        }
+      }
+    }' "${hist}" "${metrics}"
+}
+
+case "${1:-report}" in
+  collect) cmd_collect ;;
+  report)  shift || true; cmd_report "${1:-15}" ;;
+  stats)   cmd_stats ;;
+  csv)     cmd_csv ;;
+  metrics) cmd_metrics ;;
+  *) echo "usage: jqa-timings collect|report [N]|stats|metrics|csv" >&2; exit 1 ;;
+esac
