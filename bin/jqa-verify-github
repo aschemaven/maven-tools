@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""jqa-verify-github - compare the graph against GitHub's own counts.
+
+SYNOPSIS
+    jqa-verify-github [--bolt URI] [--min-coverage PCT] [--min-gap N] [--quiet]
+
+DESCRIPTION
+    A GitHub scan can report BUILD SUCCESS while silently importing almost
+    nothing: the plugin fetches only items updated since `lastScanAt`, so a
+    cache that started out partial stays partial forever. apache/maven-indexer
+    sat at 45 of 765 items for months and looked healthy.
+
+    This compares, per repository, what is in the graph against
+    GitHub's authoritative totalCount, using batched GraphQL (a handful of
+    requests for 112 repositories, negligible rate-limit cost).
+
+    Drift is expected -- issues and PRs appear continuously -- so a repository
+    is only reported when it is BOTH relatively short (--min-coverage) and
+    absolutely short (--min-gap). That keeps a nightly run quiet unless
+    something is genuinely broken.
+
+EXIT STATUS
+    0  every repository within tolerance
+    1  at least one repository below tolerance (nightly turns this into an alert)
+    2  could not run (no database, no gh)
+
+REPAIRING a repository this flags -- all three steps are needed, each alone
+is a no-op:
+    1. delete its GitHub subgraph   (else jQAssistant skips the URI as scanned)
+    2. remove its cache meta.json   (else only deltas are fetched)
+    3. re-scan with
+       -Djqassistant.scan.include.urls=github:repository::https://github.com/<owner>/<name>
+"""
+import argparse, json, subprocess, sys
+
+FIELDS = (("issues", "issues"), ("prs", "pullRequests"),
+          ("milestones", "milestones"), ("releases", "releases"))
+
+
+def graph_counts(bolt):
+    try:
+        from neo4j import GraphDatabase
+    except ImportError:
+        print("neo4j driver missing (pip install neo4j)", file=sys.stderr); sys.exit(2)
+    q = """
+    MATCH (r:GitHub:Repository)
+    OPTIONAL MATCH (r)-[]->(i:GitHub:Issue) WHERE NOT i:PullRequest
+    WITH r, count(DISTINCT i) AS issues
+    OPTIONAL MATCH (r)-[]->(p:GitHub:PullRequest)
+    WITH r, issues, count(DISTINCT p) AS prs
+    OPTIONAL MATCH (r)-[]->(m:GitHub:Milestone)
+    WITH r, issues, prs, count(DISTINCT m) AS milestones
+    OPTIONAL MATCH (r)-[]->(rel:GitHub:Release)
+    RETURN r.owner AS owner, r.name AS name, issues, prs, milestones,
+           count(DISTINCT rel) AS releases
+    """
+    out = {}
+    try:
+        d = GraphDatabase.driver(bolt, auth=("neo4j", "neo4j"))
+        with d.session(database="neo4j") as s:
+            for r in s.run(q):
+                out[f"{r['owner']}/{r['name']}"] = {k: r[k] for k, _ in FIELDS}
+        d.close()
+    except Exception as e:
+        print(f"cannot query {bolt}: {type(e).__name__}: {e}", file=sys.stderr); sys.exit(2)
+    return out
+
+
+def api_counts(repos, batch=20):
+    out = {}
+    for i in range(0, len(repos), batch):
+        parts = []
+        for j, full in enumerate(repos[i:i + batch]):
+            owner, name = full.split("/", 1)
+            sel = " ".join(f"{api} {{ totalCount }}" for _, api in FIELDS)
+            parts.append(f'r{i+j}: repository(owner:"{owner}", name:"{name}") {{ nameWithOwner {sel} }}')
+        p = subprocess.run(["gh", "api", "graphql", "-f", "query=query {" + " ".join(parts) + "}"],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            print(f"gh graphql failed: {p.stderr[:200]}", file=sys.stderr); sys.exit(2)
+        for v in (json.loads(p.stdout).get("data") or {}).values():
+            if v:
+                out[v["nameWithOwner"]] = {k: v[api]["totalCount"] for k, api in FIELDS}
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--bolt", default="bolt://localhost:7689")
+    ap.add_argument("--min-coverage", type=float, default=90.0,
+                    help="percent below which a repository is reported (default 90)")
+    ap.add_argument("--min-gap", type=int, default=25,
+                    help="absolute shortfall below which nothing is reported (default 25)")
+    ap.add_argument("--quiet", action="store_true")
+    a = ap.parse_args()
+
+    g = graph_counts(a.bolt)
+    if not g:
+        print("no GitHub repositories in the graph", file=sys.stderr); sys.exit(2)
+    api = api_counts(sorted(g))
+
+    bad, tot_g, tot_a = [], {}, {}
+    for key in sorted(set(g) & set(api)):
+        for f, _ in FIELDS:
+            gv, av = g[key][f], api[key][f]
+            tot_g[f] = tot_g.get(f, 0) + gv
+            tot_a[f] = tot_a.get(f, 0) + av
+            gap = av - gv
+            cov = 100.0 * gv / av if av else 100.0
+            if gap >= a.min_gap and cov < a.min_coverage:
+                bad.append((key, f, gv, av, cov))
+
+    if not a.quiet:
+        print(f"{'entity':12} {'graph':>9} {'API':>9} {'coverage':>9}")
+        for f, _ in FIELDS:
+            cov = 100.0 * tot_g[f] / tot_a[f] if tot_a[f] else 100.0
+            print(f"{f:12} {tot_g[f]:9d} {tot_a[f]:9d} {cov:8.2f}%")
+        print(f"\nrepositories compared: {len(set(g) & set(api))}")
+
+    if bad:
+        print(f"\nUNDER-COVERED (<{a.min_coverage}% and >={a.min_gap} missing):")
+        for key, f, gv, av, cov in sorted(bad, key=lambda x: x[4]):
+            print(f"  {key:45} {f:11} {gv:6d}/{av:<6d} {cov:6.1f}%")
+        return 1
+    if not a.quiet:
+        print("\nall repositories within tolerance")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
