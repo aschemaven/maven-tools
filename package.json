@@ -1,0 +1,17 @@
+{
+  "name": "maven-tools-docs",
+  "private": true,
+  "description": "Documentation toolchain for maven-tools (Antora + PlantUML via Kroki)",
+  "scripts": {
+    "kroki:start": "docker compose up -d kroki",
+    "kroki:stop": "docker compose down",
+    "docs": "antora --fetch antora-local-playbook.yml",
+    "docs:remote": "antora --fetch antora-playbook.yml"
+  },
+  "devDependencies": {
+    "@antora/cli": "^3.2.0",
+    "@antora/lunr-extension": "^1.0.0-alpha.13",
+    "@antora/site-generator": "^3.2.0",
+    "asciidoctor-kroki": "^0.18.1"
+  }
+}

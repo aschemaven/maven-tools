@@ -1,0 +1,31 @@
+= Maven Tools
+
+`maven-tools` builds the entire Maven ecosystem and turns it into a jQAssistant graph.
+
+The corpus consists of the Git repositories declared by the `repo` manifest in `apache/maven-sources`.
+Source code, Git history and GitHub metadata become a Neo4j database, queryable over Bolt and through an MCP server.
+
+== Where to start
+
+* xref:arc42:05-building-blocks.adoc[Building Block View] -- which scripts exist and what each owns
+* xref:arc42:06-runtime-view.adoc[Runtime View] -- how they interact, as sequence diagrams
+
+== Documentation form
+
+The architecture documentation follows https://arc42.org[arc42].
+Chapters 1, 3, 5, 6, 7, 8 and 9 are filled; the others stay empty until there is something to say.
+
+Diagrams are PlantUML, rendered by Antora at build time through
+https://docs.asciidoctor.org/diagram-extension/latest/[Kroki].
+Only the `.puml` sources are under version control, in `docs/modules/arc42/partials/`; no image is committed.
+
+[source,bash]
+----
+npm install            # once
+npm run kroki:start    # local Kroki container on :8000
+npm run docs           # build the site
+npm run kroki:stop
+----
+
+Without the local container the build falls back to the public `https://kroki.io` -- which would send the diagram source to a third party.
+Remove `kroki-server-url` from the playbook if that is acceptable.

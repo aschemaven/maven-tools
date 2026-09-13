@@ -1,0 +1,59 @@
+@startuml
+title maven-tools -- building blocks
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+package "Orchestration" {
+  [jqa-nightly] as NIGHTLY
+  [run-jqa-cycle] as CYCLE
+  [compat-tick] as TICK
+}
+
+package "Execution" {
+  [run-maven] as MVN
+  [run-jqa] as JQA
+  [common-functions.sh] as COMMON
+}
+
+package "Operations & verification" {
+  [jqa-serve] as SERVE
+  [jqa-publish] as PUB
+  [jqa-scratch] as SCRATCH
+  [jqa-verify-github] as VERIFY
+  [jqa-timings] as TIMINGS
+  [check-local-clones] as CLONES
+}
+
+database "maven/\n133 clones" as REPOS
+database ".m2/repository\n(split LRM)" as M2
+database ".github-cache" as GHCACHE
+database "jqassistant/\nstore-work" as STORE
+database "jqassistant/\npublish blue|green" as PUBSTORE
+database "reports/, logs/" as STATE
+
+NIGHTLY --> CYCLE
+NIGHTLY --> PUB
+NIGHTLY --> VERIFY
+NIGHTLY --> TIMINGS
+CYCLE --> MVN
+CYCLE --> JQA
+TICK --> MVN
+
+MVN ..> COMMON
+JQA ..> COMMON
+CLONES ..> COMMON
+
+MVN --> REPOS
+MVN --> M2
+JQA --> REPOS
+JQA --> GHCACHE
+JQA --> STORE
+PUB --> STORE
+PUB --> PUBSTORE
+SERVE --> PUBSTORE
+SCRATCH --> STORE
+NIGHTLY --> STATE
+TIMINGS --> STATE
+@enduml

@@ -1,0 +1,36 @@
+@startuml
+title Repairing an under-covered repository
+
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+
+actor operator as OP
+participant "jqa-verify-github" as VER
+database "graph" as G
+participant "run-jqa\n(github)" as JQA
+database ".github-cache" as C
+boundary "GitHub API" as GH
+
+VER -> G : count per repository
+VER -> GH : GraphQL totalCount
+VER --> OP : under-covered: 1 of 261 issues
+
+note over OP
+  Each of the following steps is a NO-OP on its own.
+  All three are required.
+end note
+
+OP -> G : 1. delete the GitHub subgraph of that repository
+note right: otherwise jQAssistant skips the URI:\n"has already been scanned, skipping" (DEBUG level!)
+
+OP -> C : 2. remove meta.json
+note right: otherwise only items newer than lastScanAt are fetched --\na cache that started out partial never fills itself
+
+OP -> JQA : 3. scan, restricted to that one URL
+JQA -> GH : full fetch
+GH --> JQA : 261 issues + 504 PRs
+JQA -> G : write
+
+OP -> VER : 4. verify again
+VER --> OP : 261/261 -- 100%
+@enduml

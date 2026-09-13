@@ -1,0 +1,40 @@
+= 1. Introduction and Goals
+
+`maven-tools` builds the Maven ecosystem from source on a regular schedule and turns source code, Git history and GitHub metadata into a searchable graph.
+
+== Task
+
+The corpus is the set of Git repositories declared by the `repo` manifest in `apache/maven-sources` -- `apache/maven*`, `codehaus-plexus/*` and `eclipse-sisu/*`.
+The result is roughly 17.8 million nodes in Neo4j: Maven models, bytecode, commits, branches, tags, issues, pull requests, milestones and releases.
+
+The graph answers questions no single repository can.
+
+Ecosystem-wide dependencies:: Which components use a given library, in which version?
+Change impact:: Which projects are affected by a plugin change?
+Project health:: Where do open issues pile up, where have releases stalled?
+
+== Quality goals
+
+[cols="1,3"]
+|===
+|Goal |Rationale
+
+|Completeness
+|A graph that is silently missing data is worse than no graph, because nobody notices.
+GitHub coverage is therefore checked against the API after every run (xref:06-runtime-view.adoc[Runtime View], scenario 3).
+
+|Unattended operation
+|The pipeline must work without an interactive shell, including notification on failure.
+
+|Reproducibility
+|Same inputs, same graph.
+Environment dependencies -- SDKman, direnv, tokens -- are resolved explicitly instead of assumed.
+
+|Observability
+|Phase durations are appended to a time series, so regressions show up as data rather than as a feeling.
+|===
+
+== Stakeholders
+
+Operation is local, on developer machines (`machines.txt` distinguishes `controller` from `runner`), not on a CI server.
+A full reactor build exceeds GitHub Actions' time limits by a wide margin.

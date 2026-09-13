@@ -1,0 +1,152 @@
+= 6. Runtime View
+
+== Scenario 1: the nightly run
+
+The regular case, and the one the schedule exists for.
+
+[plantuml,nightly-sequence,svg,align=center]
+----
+include::partial$nightly-sequence.puml[]
+----
+
+Three decisions in that flow are worth spelling out, because each was learned the hard way.
+
+*Manifest sync comes first, and `PROJECTS` is read afterwards.*
+The project list comes from `.repo/project.list`, which the sync changes.
+Sourcing `common-functions.sh` earlier would run the whole cycle against the previous corpus.
+
+*Building is restricted to changed projects, scanning is not.*
+A fetch costs about a minute, a full build about fifty, and on most nights only a handful of repositories move -- so rebuilding the rest reproduces byte-identical output.
+Scanning is different: commits can land on branches that were never built, tags move, heads advance.
+Since the scan reads local clones and caches, covering everything is cheap compared to the risk of a graph that is quietly partial.
+
+*GitHub and analyze run unconditionally.*
+Issues, pull requests and comments change without a single commit.
+Measured drift across the corpus is roughly 25 items per ten hours.
+
+[WARNING]
+====
+The `github` phase silently does nothing when the store already knows the URIs: jQAssistant records scanned URIs and reports `BUILD SUCCESS` within seconds.
+Observed on 2026-09-12 -- an eleven-second phase in an otherwise green run, with the coverage check the only thing that noticed.
+This is the main reason every run rebuilds from an empty store (scenario 2): a fresh store knows no URIs, so the phase cannot no-op.
+====
+
+== Scenario 2: why every run is a rebuild
+
+Each nightly run writes a *new* dated store rather than extending an existing one.
+
+[source]
+----
+jqa-nightly
+   │
+   ├─ scan / github / analyze ──► jqassistant/store-<date>-<time>   (new, empty)
+   │
+   └─ jqa-publish run store-<date>-<time>
+          ├─ stage    rsync --delete into the passive slot
+          ├─ verify   probe container counts nodes -- failure aborts here
+          └─ switch   move symlink, RECREATE container
+----
+
+Two reasons, and the second is the decisive one.
+
+*Drift.* Incremental runs never remove anything, because jQAssistant works with `scan.reset=false`.
+A branch, tag or pull request deleted upstream stays in the graph forever.
+In a rebuild it simply never appears.
+
+*The GitHub phase does not work incrementally at all.*
+Refreshing GitHub data in an existing store is not cheap-but-partial -- it does nothing.
+jQAssistant records scanned URIs and skips them, ending in `BUILD SUCCESS` after seconds.
+Making it work would mean deleting the `GitHub:Repository` nodes first, and the scan then costs its full ~199 minutes anyway; the delete comes on top.
+Deleting roughly 100,000 nodes with their relationships inside Neo4j is far slower than dropping a directory.
+
+A rebuild therefore costs no more than a *corrected* incremental run, and removes drift for free.
+
+[NOTE]
+====
+The price is disk and wall-clock: about 5.5 GB per store (`KEEP_STORES` governs retention) and roughly four to five hours per night, dominated by the GitHub phase.
+`--incremental` still exists for a quick partial refresh, but is not meant for scheduled runs.
+====
+
+[IMPORTANT]
+====
+Why copy at all, when incremental runs could write straight into the served database?
+Neo4j Community serves exactly one database.
+Rebuilding *in* the served database would leave the graph incomplete for hours.
+Building beside it and swapping keeps the previous state queryable until the last second, and a failed run never becomes the published graph.
+====
+
+Measured on a real cycle: 5.9 GB store, of which 389 MB were actually transferred (`Literal data`), the rest matched by the delta algorithm.
+The switch itself costs about six seconds of unavailability.
+
+== Scenario 3: repairing an under-covered repository
+
+Triggered by `jqa-verify-github`.
+The procedure is counter-intuitive because *each step alone is a no-op*.
+
+[plantuml,repair-sequence,svg,align=center]
+----
+include::partial$repair-sequence.puml[]
+----
+
+[WARNING]
+====
+Both shortcuts are silent.
+A scan that skips every URI ends with `BUILD SUCCESS` in a few seconds and is indistinguishable from a successful run in the log.
+That is how `apache/maven-indexer` sat at 45 of 765 items for months without a single run ever failing.
+====
+
+== Measured durations
+
+Reference values on `godecane`:
+
+[cols="1,1,3"]
+|===
+|Phase |Duration |Note
+
+|`build`
+|~53 min
+|Full corpus; a nightly builds only changed projects
+
+|`scan`
+|~47 min
+|All projects, incremental, after fixing the `-[*]->` traversal
+
+|`github`
+|199 min
+|Full, 112 repositories, with negligible API usage.
+11 seconds when the store already knows the URIs -- see the warning above
+
+|`analyze`
+|~1 min
+|Rule evaluation and reports
+|===
+
+The time series behind these numbers is maintained by `jqa-timings`; it is where regressions become visible.
+
+== Scenario 4: asking the graph how current it is
+
+Because the graph is republished rather than updated in place, "how old is this data" is a question about the served instance, not about the pipeline.
+Ask the instance itself.
+
+[source,cypher]
+----
+MATCH (c:Git:Commit)
+RETURN 'git commits' AS source, count(c) AS items, max(c.date) AS newest
+UNION ALL
+MATCH (i:GitHub:Issue) WHERE NOT i:PullRequest
+RETURN 'issues' AS source, count(i) AS items, max(i.updatedAt) AS newest
+UNION ALL
+MATCH (p:GitHub:PullRequest)
+RETURN 'PRs' AS source, count(p) AS items, max(p.updatedAt) AS newest
+----
+
+All three aliases must be spelled out in every `UNION` branch; Neo4j rejects the query otherwise.
+
+The row count matters as much as the date.
+A commit total far above the roughly 200,000 a rebuild produces means the instance still holds the duplicates that incremental scanning created, and is therefore a store from before the rebuild switch.
+
+[TIP]
+====
+Run the query through the MCP server to learn what the MCP server actually serves.
+That is a different question from what the pipeline last published, and the two answers diverge whenever the MCP points at the scratch instance (port 7689) instead of the published one (port 7688).
+====

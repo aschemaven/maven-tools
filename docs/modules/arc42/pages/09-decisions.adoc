@@ -1,0 +1,88 @@
+= 9. Architecture Decisions
+
+Short form: decision, rationale, consequence.
+Several came out of measurements and correct an earlier assumption.
+
+== AD-1: Write offline, publish separately
+
+Both modes write to an offline store; publication is a separate, final step.
+
+Rationale:: A run that fails halfway must not leave the served graph half-updated, and readers must not watch data appear mid-flight.
+Publication is also the only step that needs verifying, so making it explicit gives a natural place for that check.
+Consequence:: Rebuild and `--incremental` end in the same `jqa-publish run`, and the mechanism is identical to the one that will later ship to a public server.
+
+== AD-2: The container gets its own copy
+
+`jqa-publish` never binds a working store; it binds `publish/blue` or `publish/green`.
+
+Rationale:: Neo4j writes to every store it opens (transaction logs, index population).
+A served store that is simultaneously a scan target would be neither locked nor consistent.
+Consequence:: A publication costs a full rsync into the passive slot -- measured at 389 MB of 5.9 GB, roughly 7 percent.
+In exchange, scanning and serving can never interfere.
+
+== AD-3: Change detection over all remote refs
+
+A repository's fingerprint is the hash over *all* `refs/remotes`, not over the checked-out branch.
+
+Rationale:: The GitHub scan resolves branch heads from the graph.
+A moved remote ref that is not checked out locally would otherwise trigger an expensive API walk -- 35 of 116 branches in the case of `apache/maven`.
+Consequence:: Slightly more repositories count as changed; the API walks disappear.
+
+== AD-4: Build only what changed, scan everything
+
+Building is restricted to changed projects, scanning is not.
+
+Rationale:: Rebuilding an unchanged project reproduces byte-identical output and costs about fifty minutes across the corpus.
+Scanning is the opposite: commits land on branches that were never built, tags move, heads advance.
+The scan reads local clones and caches, so covering everything is cheap compared to a graph that is quietly partial.
+Consequence:: A night with no changes still costs a full scan.
+`SCAN_CHANGED_ONLY=true` restores the narrow behaviour when a quick run is wanted.
+
+== AD-9: Rebuild nightly instead of refreshing incrementally
+
+Every scheduled run writes a new dated store; `--incremental` is opt-in.
+
+Rationale:: The GitHub phase cannot refresh an existing store at all -- jQAssistant skips already-scanned URIs and reports success.
+Correcting that requires deleting the `GitHub:Repository` nodes, after which the scan costs its full runtime anyway, with the delete on top.
+Deleting ~100,000 nodes and their relationships in Neo4j is markedly slower than removing a directory.
+A rebuild is therefore not more expensive than a corrected incremental run, and it eliminates drift as a side effect.
+Consequence:: Roughly four to five hours per night and ~5.5 GB per retained store.
+The separate weekly rebuild agent became redundant and was removed.
+
+== AD-5: Resolve the environment explicitly
+
+`run-jqa-cycle` loads the direnv environment, puts an explicit Maven on `PATH` and derives tokens from `gh`.
+
+Rationale:: SDKman initialises from `~/.zshrc` resp. `~/.bashrc`, which are read for *interactive* shells only.
+Under launchd or cron a bare `mvn` fails.
+Likewise the GitHub plugin reads `GITHUB_OAUTH`, not `GITHUB_TOKEN` -- the latter is the Maven side for GitHub Packages.
+Consequence:: The scripts work in both worlds without the shell having to be prepared.
+
+== AD-6: Check coverage against the API, but do not abort
+
+After every run `jqa-verify-github` compares the graph with `totalCount`.
+
+Rationale:: A GitHub scan can report `BUILD SUCCESS` and import almost nothing.
+Without an independent cross-check that goes unnoticed.
+The double threshold -- relative *and* absolute -- prevents false alarms from ordinary drift.
+Consequence:: Incompleteness raises a notification but does not discard a night's work.
+It proved itself on its first scheduled run, catching an eleven-second no-op GitHub phase.
+
+== AD-7: Time series instead of single measurements
+
+`jqa-timings` appends phase durations to a history.
+
+Rationale:: A before/after measurement with warm caches and a persistent store is almost always confounded.
+A "five times faster" claim arose exactly that way and was wrong.
+Only execution plans (`EXPLAIN`) and isolated micro-benchmarks held up.
+Consequence:: Performance statements rest on the series, not on two runs.
+
+== AD-8: Query logging only against a server
+
+Query logging is configured through `store.embedded.neo4j-properties` but works only against a real server.
+
+Rationale:: Query logging belongs to the server logging service.
+An embedded `DatabaseManagementService` never starts it; the settings are silently ignored.
+Demonstrated by a full run that produced no `query.log` at all.
+Consequence:: Profiling is another argument for the Neo4j server, not just for serving.
+Embedded runs are left with JFR and thread sampling.

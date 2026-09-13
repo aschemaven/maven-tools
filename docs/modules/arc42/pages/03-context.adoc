@@ -1,0 +1,56 @@
+= 3. Context and Scope
+
+== Business context
+
+[source]
+----
+   apache/maven-sources ──── repo manifest ────┐
+                                               v
+   Git repositories ───────────────────► [ maven-tools ] ───► Neo4j graph ───► MCP / Cypher
+                                               ^                                Reports
+   GitHub REST / GraphQL API ──────────────────┘
+   Maven Central / GitHub Packages ────────────┘
+----
+
+== External interfaces
+
+[cols="1,1,2"]
+|===
+|Partner |Direction |Content
+
+|`apache/maven-sources`
+|read, via `repo sync`
+|The manifest: which repositories belong to the corpus, which count as retired.
+
+|GitHub (Git transport)
+|read, `git fetch --all --prune --tags`
+|Commits, branches and tags of every repository.
+
+|GitHub REST API
+|read, via the jQAssistant GitHub plugin
+|Issues, pull requests, milestones, releases.
+Responses are kept in the file cache under `.github-cache`.
+
+|GitHub GraphQL API
+|read, `jqa-verify-github`
+|`totalCount` per repository for the coverage check, batched 20 repositories per request.
+
+|Maven Central, GitHub Packages
+|read
+|Build dependencies and the jQAssistant plugins.
+
+|Neo4j
+|read and write, Bolt
+|The graph itself.
+
+|MCP server `jqassistant`
+|read and write
+|Exposes the graph to an LLM session (`bolt://localhost:7689`, the scratch instance).
+|===
+
+== Out of scope
+
+* Publishing Maven artifacts -- building happens solely to feed the graph.
+* Fixing bugs in the ecosystem projects; findings move to `maven-bugfixing`.
+* Running a public service.
+The graph is local today; a later read-only publication is designed for but not deployed.

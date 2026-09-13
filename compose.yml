@@ -1,0 +1,28 @@
+# Documentation toolchain: Kroki renders the PlantUML sources at build time, so
+# no diagram image is ever committed.
+#
+#   docker compose up -d kroki      # start
+#   npm run docs                    # build the site
+#   docker compose down             # stop
+#
+# The version is pinned deliberately. Using ":latest" silently keeps whatever
+# image happens to sit in the local Docker cache -- that is how this setup ran
+# against kroki 0.28.0 (May 2025) while 0.32.1 was current, with a PlantUML more
+# than a year behind.
+services:
+  kroki:
+    image: yuzutech/kroki:0.32.1
+    ports:
+      - "8000:8000"
+    environment:
+      # Companion container; only needed for mermaid diagrams. PlantUML, C4 and
+      # structurizr are built into the main image.
+      - KROKI_MERMAID_HOST=mermaid
+    depends_on:
+      - mermaid
+    restart: unless-stopped
+  mermaid:
+    image: yuzutech/kroki-mermaid:0.32.1
+    expose:
+      - "8002"
+    restart: unless-stopped

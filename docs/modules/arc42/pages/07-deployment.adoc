@@ -1,0 +1,94 @@
+= 7. Deployment View
+
+Three Neo4j roles with clearly separated duties.
+The separation is not symmetry -- it follows from a property of Neo4j Community.
+
+[plantuml,deployment,svg,align=center]
+----
+include::partial$deployment.puml[]
+----
+
+== Instances
+
+[cols="2,1,1,3"]
+|===
+|Instance |Bolt |HTTP |Role
+
+|`jqa-neo4j-published`
+|7688
+|7475
+|Result of the pipeline, started with `server.databases.default_to_read_only=true`.
+No write path exists.
+Blue/green through `jqa-publish`.
+
+|`jqa-neo4j-scratch`
+|7689
+|7476
+|Writable playground for ad-hoc evaluation (`jqa-scratch`).
+Target of the `jqassistant` MCP server.
+
+|-- free --
+|**7687**
+|**7474**
+|Deliberately unused, so any other project on this machine can run its own jQAssistant instance.
+|===
+
+[IMPORTANT]
+====
+The default ports stay free.
+Assigning them here would collide with every other jQAssistant project on the same machine.
+====
+
+== Why three roles instead of one instance
+
+Neo4j Community cannot separate reading from writing per user.
+Measured, not assumed:
+
+[source]
+----
+SHOW ROLES                                  -> Unsupported administration command
+SHOW USERS                                  -> roles: NULL
+ALTER DATABASE neo4j SET ACCESS READ ONLY   -> Unsupported administration command
+server.databases.default_to_read_only       -> start-up configuration, whole instance
+----
+
+An instance is therefore either writable for everyone or read-only for everyone, decided at start-up.
+Hence the split: the published instance is irrevocably read-only, and writes happen elsewhere.
+
+== Publication path
+
+[source]
+----
+pipeline writes OFFLINE            jqassistant/store-work  (or store-<date>)
+        │
+        │ jqa-publish run
+        ├─ stage    rsync --delete into the PASSIVE slot (blue|green)
+        ├─ verify   probe container counts nodes; failure aborts everything
+        └─ switch   move symlink + RECREATE container
+                    │
+                    v
+                jqassistant/publish/current -> blue|green
+----
+
+[WARNING]
+====
+The container must be *recreated*, not restarted.
+Docker resolves a symlinked bind mount exactly once, when the mount is created, and remembers the real path.
+
+[source]
+----
+1. start (current -> blue):        BLUE
+2. symlink moved to green
+3. after docker restart:           BLUE     <-- old slot, looks healthy
+4. after rm + docker run:          GREEN
+----
+
+A `docker restart` would keep serving the old graph without anything failing.
+====
+
+== Later: internet operation
+
+The same mechanism over the network: computed locally, pushed by `rsync` into the passive slot on the server, symlink and container swapped there.
+Measured delta for a full cycle: 389 MB of 5.9 GB, so roughly 7 percent.
+
+The public instance stays read-only and needs no credentials at all -- in particular no GitHub token, which would otherwise sit on a reachable machine.

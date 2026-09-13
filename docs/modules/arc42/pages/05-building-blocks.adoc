@@ -1,0 +1,116 @@
+= 5. Building Block View
+
+== Level 1: overview
+
+`maven-tools` is a set of Bash scripts under `bin/` operating on shared state in directories.
+There is no daemon and no application server; the only long-lived processes are the Neo4j containers.
+
+[plantuml,building-blocks,svg,align=center]
+----
+include::partial$building-blocks.puml[]
+----
+
+== Level 2: the blocks
+
+=== Orchestration
+
+`jqa-nightly`::
+The unattended entry point.
+Syncs the manifest, fetches all repositories, determines which ones changed, and drives `run-jqa-cycle`.
+Holds a lock, writes `var/nightly-status.txt`, notifies on failure.
+Rebuilds into a new dated store by default; `--incremental` extends the work store instead.
+
+`run-jqa-cycle`::
+Runs the `build`, `scan`, `github` and `analyze` phases and times each one.
+Compensates for the differences between interactive and non-interactive shells: loads the direnv environment, puts an explicit Maven on `PATH`, derives `GITHUB_TOKEN` and `GITHUB_OAUTH` from the `gh` CLI.
+Serialises the `github` phase through a lock on `.github-cache`.
+
+`compat-tick`::
+A separate branch of work: the compatibility matrix (components x Maven variants).
+Shares `common-functions.sh` and the project list but does not write to the graph.
+
+=== Execution
+
+`run-maven`::
+Builds corpus projects.
+Resolves Maven per project (wrapper, Maven 4 paths, `variants.txt`), honours `isolated-m2-projects.txt` and `lrm-split-skip-projects.txt`, logs per project under `logs/<project>/`.
+
+`run-jqa`::
+Wraps the jQAssistant Maven plugin.
+Knows the goals `scan`, `github`, `analyze`, `server`, `reset` and the report goals.
+With `-r <uri>` it writes to a remote store instead of an embedded one.
+
+`common-functions.sh`::
+The shared base: reads `PROJECTS` from `.repo/project.list`, applies `exclude-projects.txt`, resolves Maven through `find_mvn_by_version()`, enables the split mode of the local repository.
+
+=== Operations and verification
+
+`jqa-publish`::
+Blue/green publication of a read-only graph: `stage` (rsync into the passive slot), `verify` (a probe container counts nodes), `switch` (move the symlink, recreate the container).
+Only the switch makes a new state visible.
+
+`jqa-serve`::
+Runs Neo4j in a container over a store.
+Superseded in the pipeline by `jqa-publish`, still useful for serving an arbitrary store ad hoc.
+
+`jqa-scratch`::
+Writable playground on a copy of the pipeline store.
+`exec` runs and records, `promote` turns a recording into a replay script, `reset` restores reproducibly.
+See xref:08-concepts.adoc[Crosscutting Concepts].
+
+`jqa-verify-github`::
+Compares the graph against GitHub's own `totalCount` per repository.
+Reports a repository only when it is short both relatively and absolutely, so ordinary drift does not raise alarms.
+
+`jqa-timings`::
+Harvests the `timing.txt` of every run into an append-only time series (`metrics/jqa-timings.tsv`) and renders table and statistics.
+
+`check-local-clones`::
+Pre-flight before a GitHub scan: are local clones shallow, single-branch or tag-less?
+Sparse checkouts and partial clones are deliberately *not* reported -- they restrict the working tree, not the commit graph.
+
+== State
+
+[cols="1,3"]
+|===
+|Location |Meaning
+
+|`maven/`
+|Symlink to the `repo` tree.
+Source for builds and the Git scan.
+
+|`.m2/repository`
+|Shared local repository in split layout (`installed/` and `cached/` separated), addressed through `MAVEN_TOOLS_CACHE`.
+It lives under `~/wrk/maven`, *not* in the worktree.
+
+|`.github-cache`
+|File cache of the GitHub plugin, ~1.2 GB.
+Survives every store and is why a full GitHub scan costs almost no API budget.
+
+|`jqassistant/store-work`
+|The embedded store the pipeline writes to, offline.
+`store-<date>-<time>` is what a scheduled rebuild produces; `store-work` only exists with `--incremental`.
+
+|`jqassistant/publish/`
+|`blue/`, `green/` and the `current` symlink -- the publication target served by the read-only container.
+
+|`jqassistant/scratch/`
+|The playground's `data/` plus `cypher/` (replay scripts) and `recorded/` (session logs).
+
+|`reports/`
+|State between runs: `nightly-heads.tsv`, `jqa-timings.tsv`, `github-coverage.txt`, `nightly-status.txt`.
+
+|`logs/`
+|One directory per run, `jqa-cycle-<time>-<pid>/`, with `timing.txt` and a log per phase.
+|===
+
+== Why this split
+
+The separation of `run-jqa` and `run-jqa-cycle` is deliberate.
+
+[NOTE]
+====
+`run-jqa` is the thin wrapper around jQAssistant and stays usable on its own.
+`run-jqa-cycle` adds exactly what unattended operation needs: environment resolution, measurement, locking.
+Debug interactively with the first; schedule the second.
+====

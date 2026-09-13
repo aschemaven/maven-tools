@@ -1,0 +1,45 @@
+@startuml
+title Deployment -- three roles, one reason
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+node "godecane / godestorm (local)" {
+  folder "maven-tools" {
+    [jqa-nightly] as N
+    database "store-work" as W
+    database "publish/blue" as B
+    database "publish/green" as G
+    database "scratch/data" as S
+  }
+  node "Docker" {
+    [jqa-neo4j-published\nbolt 7688 -- READ ONLY] as PUB
+    [jqa-neo4j-scratch\nbolt 7689 -- writable] as SCR
+  }
+  [MCP server\njqassistant] as MCP
+}
+
+node "aschemann.net (planned)" {
+  [Neo4j\ndefault_to_read_only=true] as REMOTE
+  database "blue | green" as RSLOT
+}
+
+N --> W : writes offline
+W --> B : jqa-publish (rsync + verify + switch)
+W --> G
+B --> PUB : current symlink
+G --> PUB
+S --> SCR
+MCP --> SCR : ad-hoc, writable
+
+B ..> RSLOT : rsync delta\n(~7% of the store)
+RSLOT --> REMOTE
+
+note bottom of REMOTE
+  Neo4j Community has no roles and no runtime
+  ACCESS switch, so an instance is either writable
+  for everyone or read-only for everyone. The public
+  one therefore has no write path at all -- and needs
+  no credentials, in particular no GitHub token.
+end note
+@enduml

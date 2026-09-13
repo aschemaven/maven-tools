@@ -1,0 +1,63 @@
+= 8. Crosscutting Concepts
+
+== Ad-hoc evaluation on the scratch instance
+
+The published instance is the pipeline's result and stays untouched.
+Own experiments -- typically trying out persistence that should later become jQAssistant rules -- run on a second, writable instance.
+
+The cycle is deliberately closed:
+
+[source]
+----
+jqa-scratch reset            copy the pipeline store, recreate container, then apply
+jqa-scratch exec "<cypher>"  run AND append to scratch/recorded/session-<date>.cypher
+jqa-scratch promote <file>   turn a recording into a numbered script in scratch/cypher/
+jqa-scratch apply            replay scratch/cypher/*.cypher in name order
+----
+
+The playground is therefore reproducible rather than historically grown: after every `reset` the same state returns, because `apply` runs automatically.
+
+[TIP]
+====
+The path from experiment to rule is short, and intentionally so:
+
+. `exec` -- try it out, recorded as a side effect
+. `promote` -- clean up, make idempotent (`MERGE` instead of `CREATE`), number it
+. move into `jqassistant/rules/` as a concept or constraint
+
+Step 2 is where the insight happens: what survives a reset is usually worth becoming a rule.
+====
+
+=== Limits of the recording
+
+Recording happens at the call site, not in the server.
+The obvious route through Neo4j's `query.log` does not work with Community:
+
+[source]
+----
+SHOW SETTINGS ... WHERE name STARTS WITH 'db.logs.query'
+  db.logs.query.enabled   INFO   isExplicitlySet: TRUE
+----
+
+The setting is accepted, but no `query.log` appears -- query logging is Enterprise.
+
+[NOTE]
+====
+Consequently, statements that do not go through `jqa-scratch exec` -- from an MCP session or straight from `cypher-shell` -- are *not* captured.
+Whoever wants to keep them puts them under `jqassistant/scratch/cypher/` themselves.
+====
+
+== Silent failure as a recurring pattern
+
+Repeatedly, a setting was accepted and then ignored, without any error:
+
+* `store.embedded.neo4j-properties` with query logging -- ineffective for an embedded store
+* `ALTER DATABASE ... SET ACCESS` -- unsupported in Community
+* `db.logs.query.enabled` -- set, but no log file
+* `docker restart` after a symlink change -- old store, healthy container
+* jQAssistant skipping already-scanned URIs with `BUILD SUCCESS` and a DEBUG-level message
+
+Hence the rule running through these scripts: *after every change, verify the result -- never the return code.*
+`jqa-publish` counts nodes before it switches.
+`jqa-scratch status` really attempts a write.
+`jqa-verify-github` asks the API instead of believing the log.

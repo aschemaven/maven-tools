@@ -1,0 +1,85 @@
+@startuml
+title Nightly run (incremental)
+
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 200
+
+actor launchd
+participant "jqa-nightly" as N
+participant "repo\n(manifest)" as REPO
+collections "133 Git clones" as GIT
+participant "run-jqa-cycle" as CYCLE
+participant "run-maven" as MVN
+participant "run-jqa" as JQA
+database "store-work\n(offline)" as WORK
+participant "jqa-publish" as PUB
+database "publish/blue|green" as SLOT
+participant "Neo4j\n(published, read-only)" as NEO
+participant "jqa-verify-github" as VER
+boundary "GitHub API" as GH
+
+launchd -> N : 03:15
+activate N
+
+N -> N : clean injected .mvn files
+note right: byte-identical to develocity/ templates only;\nrepo sync refuses to remove a project otherwise
+N -> REPO : repo sync
+REPO --> N : manifest revision
+
+N -> GIT : git fetch --all --prune --tags
+GIT --> N : refs
+N -> N : hash all refs/remotes per project\ndiff against var/nightly-heads.tsv
+note right: result: list of CHANGED projects
+
+alt at least one project changed
+  N -> CYCLE : build (changed projects only)
+  CYCLE -> MVN : clean install -fae
+  MVN --> CYCLE : per-project results
+else nothing changed
+  note over N: build skipped entirely
+end
+
+N -> CYCLE : scan (ALL projects)
+note right: deliberately not restricted to changed ones:\ncommits can land on branches that were never built
+CYCLE -> JQA : jqassistant:scan
+JQA -> GIT : read .git + target/
+JQA -> WORK : write
+WORK --> JQA : ok
+
+N -> CYCLE : github
+CYCLE -> JQA : jqassistant:scan (github config)
+JQA -> GH : only what the file cache lacks
+GH --> JQA : issues, PRs, milestones, releases
+JQA -> WORK : write
+
+N -> CYCLE : analyze
+CYCLE -> JQA : jqassistant:analyze
+JQA -> WORK : concepts, constraints, reports
+
+N -> PUB : publish store-work
+activate PUB
+PUB -> SLOT : rsync --delete into the PASSIVE slot
+PUB -> PUB : verify (probe container counts nodes)
+alt verification failed
+  PUB --> N : abort -- symlink untouched, old graph stays online
+else ok
+  PUB -> SLOT : flip symlink current -> slot
+  PUB -> NEO : recreate container
+  note right: recreate, NOT restart:\nDocker resolves a symlinked bind mount only once
+end
+deactivate PUB
+
+N -> VER : verify coverage
+VER -> NEO : count issues/PRs per repository
+VER -> GH : GraphQL totalCount (batched)
+GH --> VER : authoritative counts
+alt under-covered
+  VER --> N : exit 1
+  N -> N : notify, but do NOT discard the run
+end
+
+N -> N : jqa-timings collect
+N -> N : write var/nightly-status.txt
+deactivate N
+@enduml

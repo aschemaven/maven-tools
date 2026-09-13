@@ -1,0 +1,36 @@
+site:
+  title: Maven Tools Documentation
+  start_page: maven-tools::index.adoc
+
+antora:
+  extensions:
+    - '@antora/lunr-extension'
+
+asciidoc:
+  attributes:
+    # Diagrams are rendered at build time; no SVG is committed. Sources live in
+    # docs/modules/arc42/partials/*.puml and are the only thing under version
+    # control.
+    kroki-fetch-diagram: true
+    kroki-default-format: svg
+    # Local Kroki container (npm run kroki:start). Remove this attribute to fall
+    # back to the public https://kroki.io -- which would send the diagram source
+    # to a third party.
+    kroki-server-url: http://localhost:8000
+  extensions:
+    - asciidoctor-kroki
+
+content:
+  sources:
+    - url: .
+      start_path: docs
+      worktrees: true
+      edit_url: 'https://github.com/aschemaven/maven-tools/edit/{refname}/{path}'
+
+ui:
+  bundle:
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
+    snapshot: true
+
+output:
+  dir: ./build/site

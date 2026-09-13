@@ -1,0 +1,212 @@
+= Performance findings: scanning the Maven ecosystem with jQAssistant
+:toc:
+
+Findings from the work of building a complete jQAssistant graph over the Maven ecosystem regularly and unattended.
+Recorded for later blog posts, talks and upstream tickets.
+
+== Setup
+
+Corpus:: The Git repositories declared by `apache/maven-sources`, managed with the `repo` tool.
+247,722 commits in the working trees, 188,871 of them in the graph at the time of measurement.
+Software:: jQAssistant 2.9.0 with embedded Neo4j 5.26.20, kontext-e Git plugin 2.4.0, jQAssistant GitHub plugin (fork `GAsc-1.3.x`).
+Pipeline:: `build` (Maven `clean install` across all projects) -> `scan` (Maven artifacts + `.git`) -> `github` (GitHub API) -> `analyze`.
+Machine:: macOS, Apple Silicon, local embedded file store.
+
+Reference measurements of a full run on an empty store:
+
+[cols="2,1"]
+|===
+|Phase |Duration
+
+|`build` (120 projects) |50m40s
+|`scan` (Maven + Git) |49m43s
+|`analyze` |0m55s
+|===
+
+== Finding 1: unbounded path traversal dominates incremental scans
+
+The most severe problem, and it appears *only* once the store is populated.
+
+`JQAssistantGitRepository` reads existing branches and tags like this:
+
+[source,cypher]
+----
+MATCH (repo:Git:Repository)-[*]->(branch:Branch) WHERE repo.fileName = $path RETURN branch
+MATCH (repo:Git:Repository)-[*]->(t:Tag)         WHERE repo.fileName = $path RETURN t
+----
+
+`-[*]->` follows *every* relationship type at *unlimited* depth.
+From the repository node `HAS_COMMIT` leads to all commits, and from there onwards through parent, file and author relationships.
+The query therefore explores the entire reachable subgraph just to find the branches attached directly to the repository.
+
+Meanwhile the descriptor declares the relationship directly:
+
+[source,java]
+----
+@Relation("HAS_BRANCH")
+List<GitBranchDescriptor> getBranches();
+
+@Relation("HAS_TAG")
+List<GitTagDescriptor> getTags();
+----
+
+[IMPORTANT]
+====
+On an empty store this is free, because nothing is reachable.
+On a populated store it costs minutes per project, and the cost grows with every additional repository scanned.
+That is why a *fresh scan was faster than an incremental one*: 120 projects in 49m43s versus 24 minutes for a single project.
+====
+
+Detected by thread sampling the running scan; `VarLengthExpandSlottedPipe` is the variable-length expansion:
+
+[source]
+----
+at org.neo4j.cypher.internal.runtime.slotted.pipes.VarLengthExpandSlottedPipe$$anon$1.next
+at org.neo4j.cypher.internal.runtime.interpreted.TransactionBoundQueryContext$RelationshipCursorIterator.fetchNext
+at org.neo4j.kernel.impl.newapi.DefaultRelationshipTraversalCursor.next
+----
+
+Fix: a typed single hop instead of the variable-length pattern.
+Afterwards the incremental scan of the whole corpus took 38m37s -- faster than a fresh scan.
+
+== Finding 2: missing index on `Commit.sha`
+
+Commits are resolved by SHA:
+
+[source,cypher]
+----
+MATCH (c:Commit) WHERE c.sha = $sha RETURN c
+----
+
+`GitCommitDescriptor.sha` carried no `@Indexed`, so every lookup was a full label scan.
+Notably, *every other* lookup in the same class is indexed, which makes this look like an oversight.
+
+[cols="3,2,1"]
+|===
+|Lookup |Property |`@Indexed`
+
+|`MATCH (a:Author)` |`identString` |yes
+|`MATCH (c:Committer)` |`identString` |yes
+|`MATCH (f:Git:File)` |`relativePath` |yes
+|*`MATCH (c:Commit)`* |*`sha`* |*no*
+|===
+
+Measured on the same store, 100 random SHAs, 188,871 commit nodes:
+
+[cols="2,2,1"]
+|===
+|Variant |Plan |Per lookup
+
+|with index |`NodeIndexSeek` |2.65 ms
+|forced scan |`NodeByLabelScan` + `Filter` |111.61 ms
+|===
+
+A factor of 42 per lookup.
+Verified with `SHOW INDEXES` on two stores differing only in the plugin version.
+
+== Finding 3: stale local clones cause expensive API walks
+
+The GitHub plugin resolves branch heads from the local graph and otherwise falls back to walking commits through the REST API.
+
+[source]
+----
+Imported 116 branches (38 from DB, 43 from cache, 35 from API)
+----
+
+For `apache/maven`, 35 of 116 branch heads were unknown locally because the clone was simply *stale*.
+That single repository cost more time than the remaining 111 together.
+
+[NOTE]
+====
+Staleness is not detectable from Git configuration.
+`shallow`, `single-branch` and `--no-tags` can be checked locally; a merely lagging clone cannot.
+It is only detectable empirically, from the share of branch heads found in the graph.
+====
+
+Consequence: always `git fetch --all --prune --tags` before the GitHub scan, and re-run the Git scan afterwards so the new commits reach the graph.
+A fetch alone is not enough.
+
+== Finding 4: `getParents()` issues one REST call per parent
+
+In the kohsuke library:
+
+[source,java]
+----
+public List<GHCommit> getParents() throws IOException {
+    List<GHCommit> r = new ArrayList<>();
+    for (String sha1 : getParentSHA1s())
+        r.add(owner.getCommit(sha1));   // one REST call per parent
+    return r;
+}
+----
+
+`getParentSHA1s()` returns the same SHAs from the already-fetched payload, without any network access, and does not even throw `IOException`.
+Both call sites in the plugin only ever needed `parent.getSHA1()`, so every one of those calls was superfluous.
+
+Side effect: without a read timeout a single stalled request blocked the entire scan indefinitely.
+Observed: 56 minutes parked in `HttpClientImpl.send`, 17.6 s of CPU, rate limit untouched at 5000/5000.
+
+== Finding 5: operational traps outside an interactive shell
+
+Three stumbling blocks that only surface in unattended operation:
+
+Two different tokens:: The GitHub plugin uses kohsuke/github-api and reads credentials from `~/.github` or `GITHUB_OAUTH`.
+`GITHUB_TOKEN` is ignored -- that is the Maven side for GitHub Packages.
+Without `GITHUB_OAUTH` the scan runs anonymously, burns the 60 requests per hour and then sleeps in `RateLimitHandler`.
+SDKman only interactive:: `bin/run-jqa` called a bare `mvn`.
+SDKman initialises from `~/.zshrc` resp. `~/.bashrc`, both read for *interactive* shells only.
+Under launchd, cron or `bash -c` this fails with `mvn: command not found`.
+The direnv chain:: `direnv` loads only the *nearest* `.envrc` plus whatever it pulls in explicitly via `source_up`.
+A missing `source_up` on an intermediate level cuts off all secrets above it, without any error message.
+
+== Finding 6: APOC lives in the store, not in the configuration
+
+The rules use `apoc.text.indexOf`.
+The APOC jars had been copied by hand into `jqassistant/<store>/plugins/`.
+A *freshly created* store does not contain that directory, and `analyze` then fails immediately with `Unknown function 'apoc.text.indexOf'`.
+
+The clean alternative:
+
+[source,yaml]
+----
+jqassistant:
+  store:
+    embedded:
+      apoc-enabled: true
+----
+
+Noticed along the way: the same configuration branch knows `connector-enabled`, `bolt-port` and `http-port`.
+The embedded store can therefore speak Bolt itself; a separate Neo4j server is not strictly required for that.
+
+== Finding 7: silent no-op of an already-scanned URI
+
+jQAssistant records scanned URIs in the store.
+A repeated GitHub scan against the same store skips every repository and ends with `BUILD SUCCESS` in about ten seconds -- the message is at DEBUG level.
+
+[source]
+----
+[DEBUG] URI 'https://github.com/apache/maven' has already been scanned, skipping.
+----
+
+That is indistinguishable from a successful run at INFO level, and it misled two separate sessions.
+Refreshing GitHub data in an existing store therefore requires deleting the `GitHub:Repository` nodes first.
+
+== Methodological lesson: warm caches deceive
+
+An intermediate result claimed "5x faster", measured five minutes after the start.
+Both runs scan repositories in the same order, so the second benefited from the warm file cache and from nodes the first had already written.
+Measured properly, both runs stood at the same point: 4 of 112 repositories, inside the same large repository.
+
+[WARNING]
+====
+For pipelines with caches and a persistent store, the obvious before/after measurement is almost always confounded.
+Only the plan comparison (`EXPLAIN`) and an isolated micro-benchmark on an identical store held up.
+End-to-end statements need two copies of the store and a reset cache.
+====
+
+== Open points
+
+* End-to-end effect of findings 1 and 2 is not cleanly isolated.
+* The split of the `scan` phase into Git and Maven shares is unknown, but decides whether `build || git-scan` is worth building.
+* Graph cleanup: deleted branches, tags and PRs never disappear while `scan.reset=false` is in effect.
+* A pre-populated base store versus a fresh scan -- see finding 1: as long as incremental paths are more expensive than a rebuild, the fresh store wins.

@@ -1,0 +1,42 @@
+site:
+  title: Maven Tools Documentation
+  url: http://localhost:8080
+  start_page: maven-tools::index.adoc
+
+antora:
+  extensions:
+    - '@antora/lunr-extension'
+
+asciidoc:
+  attributes:
+    # Diagrams are rendered at build time; no SVG is committed. Sources live in
+    # docs/modules/arc42/partials/*.puml and are the only thing under version
+    # control.
+    kroki-fetch-diagram: true
+    kroki-default-format: svg
+    # Local Kroki container (npm run kroki:start). Remove this attribute to fall
+    # back to the public https://kroki.io -- which would send the diagram source
+    # to a third party.
+    kroki-server-url: http://localhost:8000
+  extensions:
+    - asciidoctor-kroki
+
+content:
+  # Requires Antora >= 3.2 (pinned in package.json). Up to 3.1.x a LINKED GIT
+  # WORKTREE could not be used as a content source -- ".git" is a file there,
+  # not a directory, and Antora rejected the path with "Local content source
+  # must be a git repository". Since maven-tools is developed in worktrees,
+  # do not relax that version floor. See Antora issue #535.
+  sources:
+    - url: .
+      start_path: docs
+      worktrees: true
+      edit_url: false
+
+ui:
+  bundle:
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
+    snapshot: true
+
+output:
+  dir: ./build/local-site
