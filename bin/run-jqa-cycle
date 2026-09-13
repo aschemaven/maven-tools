@@ -1,0 +1,180 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# run-jqa-cycle - run one complete, timed jQAssistant cycle.
+#
+# SYNOPSIS
+#     run-jqa-cycle [stage ...]
+#
+# DESCRIPTION
+#     Runs the four stages of a full graph refresh in order, timing each one:
+#
+#         build     ./bin/run-maven clean install -fae ...
+#         scan      ./bin/run-jqa scan
+#         github    ./bin/run-jqa github
+#         analyze   ./bin/run-jqa analyze
+#
+#     With no arguments all four run. Named stages run only those, in the
+#     order given, e.g. `run-jqa-cycle github` for a cache-filling GitHub
+#     scan alone.
+#
+#     This is the unattended entry point the launchd tick will call, so it
+#     fixes the two things that break outside an interactive shell:
+#
+#       1. MAVEN_TOOLS_CACHE comes from .envrc via direnv. Without it
+#          run-maven/run-jqa fall back to the worktree's near-empty .m2
+#          instead of the shared cache. We load the direnv environment if the
+#          variable is not already set.
+#       2. bin/run-jqa calls a bare `mvn`, which only resolves when SDKman
+#          has been initialised by .zshrc. We put an explicit Maven on PATH.
+#
+#     The `github` stage takes an exclusive lock on the GitHub plugin cache,
+#     so two cycles (e.g. a cache-filling run in parallel with a full cycle)
+#     never write it concurrently -- the second waits.
+#
+# ENVIRONMENT
+#   JQA_STORE_URI     write to a remote store instead of an embedded one,
+#                     e.g. bolt://localhost:7687. Takes precedence over
+#                     JQA_STORE_SUFFIX. Scanning into a served Neo4j works
+#                     (verified for scan, github and analyze) and removes both
+#                     the single-writer restriction and the copy-on-promote.
+#   JQA_STORE_SUFFIX  suffix for the store directory, passed to run-jqa
+#                     (default: empty -> jqassistant/store)
+#   JQA_MVN_VERSION   SDKman Maven used for the jQA stages (default 3.9.16;
+#                     deliberately a stable 3.9, not the SDKman `current`)
+#   MAVEN_TOOLS_CACHE shared cache root; taken from direnv when unset
+#   BUILD_GOALS       goals for the build stage
+#
+# OUTPUT
+#   logs/jqa-cycle-<timestamp>/{timing.txt,<stage>.log}
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+cd "${root}" || exit 1
+
+: "${JQA_MVN_VERSION:=3.9.16}"
+: "${BUILD_GOALS:=clean install -fae -Dsurefire.rerunFailingTestsCount=2}"
+
+# 1. shared cache: reproduce the direnv environment for non-interactive shells
+if [[ -z "${MAVEN_TOOLS_CACHE:-}" ]] && command -v direnv >/dev/null 2>&1; then
+  eval "$(direnv export bash 2>/dev/null)" || true
+fi
+if [[ -z "${MAVEN_TOOLS_CACHE:-}" ]]; then
+  echo "WARNING: MAVEN_TOOLS_CACHE unset and direnv unavailable;" >&2
+  echo "         builds would use ${root}/.m2 instead of the shared cache." >&2
+fi
+
+# 2. an explicit Maven for run-jqa's bare `mvn`
+mvn_bin="${HOME}/.sdkman/candidates/maven/${JQA_MVN_VERSION}/bin"
+[[ -x "${mvn_bin}/mvn" ]] || { echo "No Maven at ${mvn_bin}/mvn" >&2; exit 1; }
+export PATH="${mvn_bin}:${PATH}"
+
+# 3. two DIFFERENT credentials, both derived from the gh CLI token:
+#    GITHUB_TOKEN - Maven side: GitHub Packages via settings.xml <server>
+#    GITHUB_OAUTH - scanner side: the GitHub plugin uses kohsuke/github-api,
+#                   which resolves credentials from ~/.github or GITHUB_OAUTH
+#                   and ignores GITHUB_TOKEN entirely. Without it the scan
+#                   silently falls back to anonymous and every repository
+#                   fails with "Failed to resolve credentials".
+if [[ -z "${GITHUB_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+  GITHUB_TOKEN="$(gh auth token 2>/dev/null)" && export GITHUB_TOKEN
+fi
+: "${GITHUB_OAUTH:=${GITHUB_TOKEN:-}}"
+export GITHUB_OAUTH
+
+stages=("$@")
+[[ ${#stages[@]} -eq 0 ]] && stages=(build scan github analyze)
+
+# Remote store wins over the directory suffix.
+store_opt=""
+if [[ -n "${JQA_STORE_URI:-}" ]]; then
+  store_opt="-r ${JQA_STORE_URI}"
+fi
+
+out="${root}/logs/jqa-cycle-$(date '+%y%m%d-%H%M%S')-$$"
+mkdir -p "${out}"
+timing="${out}/timing.txt"
+
+cache_dir="${root}/.github-cache"
+lock="${cache_dir}.lock"
+
+stamp() { date '+%F %T'; }
+
+acquire_cache_lock() {
+  local waited=0
+  until mkdir "${lock}" 2>/dev/null; do
+    [[ ${waited} -eq 0 ]] && echo "[$(stamp)] waiting for GitHub cache lock" >>"${timing}"
+    sleep 30
+    waited=$((waited + 30))
+  done
+  echo "$$" >"${lock}/pid"
+  [[ ${waited} -gt 0 ]] && echo "[$(stamp)] cache lock acquired after ${waited}s" >>"${timing}"
+  return 0
+}
+release_cache_lock() { rm -rf "${lock}"; }
+
+run_stage() {
+  local name="$1"; shift
+  local s e rc
+  echo "[$(stamp)] START $name : $*" >>"${timing}"
+  s=$(date +%s)
+  "$@" >"${out}/${name}.log" 2>&1
+  rc=$?
+  e=$(date +%s)
+  printf '[%s] END   %-8s rc=%-3s elapsed=%dm%02ds\n' \
+    "$(stamp)" "${name}" "${rc}" $(( (e-s)/60 )) $(( (e-s)%60 )) >>"${timing}"
+}
+
+{
+  echo "host=$(hostname -s)"
+  echo "root=${root}"
+  echo "stages=${stages[*]}"
+  if [[ -n "${JQA_STORE_URI:-}" ]]; then
+    echo "store=${JQA_STORE_URI}"
+  else
+    echo "store=${root}/jqassistant/store${JQA_STORE_SUFFIX:-}"
+  fi
+  echo "cache=${MAVEN_TOOLS_CACHE:-<unset>}"
+  echo "mvn=$(mvn --version 2>/dev/null | head -1)"
+  echo "github-cache=$(du -shL "${cache_dir}" 2>/dev/null | cut -f1)"
+  command -v gh >/dev/null && echo "rate-limit=$(gh api rate_limit -q '.rate.remaining')/$(gh api rate_limit -q '.rate.limit')"
+  df -h "${HOME}" | tail -1
+  echo "---"
+} >>"${timing}"
+
+for stage in "${stages[@]}"; do
+  case "${stage}" in
+    build)
+      # shellcheck disable=SC2086
+      run_stage build ./bin/run-maven ${BUILD_GOALS}
+      ;;
+    scan|analyze)
+      # shellcheck disable=SC2086
+      run_stage "${stage}" ./bin/run-jqa ${store_opt} "${stage}"
+      ;;
+    github)
+      acquire_cache_lock
+      trap release_cache_lock EXIT
+      # shellcheck disable=SC2086
+      run_stage github ./bin/run-jqa ${store_opt} github
+      release_cache_lock
+      trap - EXIT
+      ;;
+    *)
+      echo "Unknown stage: ${stage}" >&2
+      exit 1
+      ;;
+  esac
+done
+
+{
+  echo "---"
+  echo "[$(stamp)] CYCLE DONE"
+  echo "github-cache=$(du -shL "${cache_dir}" 2>/dev/null | cut -f1)"
+  [[ -z "${JQA_STORE_URI:-}" ]] && du -sh "${root}/jqassistant/store${JQA_STORE_SUFFIX:-}" 2>/dev/null
+  command -v gh >/dev/null && echo "rate-limit=$(gh api rate_limit -q '.rate.remaining')/$(gh api rate_limit -q '.rate.limit')"
+  df -h "${HOME}" | tail -1
+} >>"${timing}"
+
+echo "Timing: ${timing}"
