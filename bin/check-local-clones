@@ -1,0 +1,119 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# check-local-clones - pre-flight: are the local clones complete enough for a
+#                      GitHub scan?
+#
+# SYNOPSIS
+#     check-local-clones [-q]
+#
+# DESCRIPTION
+#     The GitHub plugin is meant to run AFTER the Git plugin has scanned full
+#     local clones. Then every branch HEAD is already a commit in the store and
+#     no API walk is needed. If clones are incomplete the scan still succeeds,
+#     but falls back to walking commits through the REST API -- orders of
+#     magnitude slower, and the main cause of rate-limit exhaustion.
+#
+#     Checked per project (all cheap, local git config reads):
+#
+#       shallow        `--depth` clone: commits are genuinely missing.
+#                      NOTE: actions/checkout defaults to fetch-depth 1, so
+#                      clones made in CI are shallow unless told otherwise.
+#       single-branch  refspec lacks refs/heads/*: other branches absent, so
+#                      pull-request head/base SHAs cannot be resolved locally.
+#       no-tags        remote.origin.tagOpt=--no-tags: releases/tags unlinkable.
+#       no-origin      no remote at all: nothing to compare against.
+#
+#     Deliberately NOT reported: sparse checkout and partial (blob-filtered)
+#     clones. Both restrict the working tree resp. blob contents, not the commit
+#     graph -- the Git plugin reads .git and is unaffected.
+#
+#     A merely STALE clone cannot be detected here; no local flag reveals it.
+#     The GitHub plugin covers that case itself by counting how many branch
+#     HEADs it resolves from the graph (see GraphBuilder#warnIfLocalScanIncomplete).
+#
+# OPTIONS
+#   -q  quiet: print only the summary, not each affected project.
+#
+# EXIT STATUS
+#   0  all clones complete (or only warnings, unless STRICT=true)
+#   1  problems found AND STRICT=true
+#
+# ENVIRONMENT
+#   STRICT   set to "true" to exit non-zero when problems are found.
+#   PROJECTS as for the other tools; defaults to .repo/project.list.
+
+dir=$(dirname "${0}")
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+
+: "${STRICT:=false}"
+quiet=false
+[[ "${1:-}" == "-q" ]] && quiet=true
+
+maven_dir="${root}/${MAVEN_PROJECTS_DIR}"
+
+shallow=(); single=(); notags=(); noorigin=(); missing=()
+total=0
+
+for project in ${PROJECTS}; do
+  [[ -z "${project// /}" ]] && continue
+  path="${maven_dir}/${project}"
+  if [[ ! -e "${path}/.git" ]]; then
+    missing+=("${project}")
+    continue
+  fi
+  total=$((total + 1))
+
+  [[ "$(git -C "${path}" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]] \
+    && shallow+=("${project}")
+
+  # Do NOT assume the remote is called "origin": repo-managed clones name their
+  # remote after the manifest (e.g. "plexus"), and a project may carry several.
+  # A clone is complete if ANY remote fetches the full refs/heads/* namespace.
+  fetchspecs=$(git -C "${path}" config --get-regexp 'remote\..*\.fetch' 2>/dev/null || true)
+  if [[ -z "${fetchspecs}" ]]; then
+    noorigin+=("${project}")
+  elif ! grep -q 'refs/heads/\*' <<<"${fetchspecs}"; then
+    single+=("${project}")
+  fi
+
+  # Likewise for tags: only complain if EVERY remote opts out.
+  tagopts=$(git -C "${path}" config --get-regexp 'remote\..*\.tagOpt' 2>/dev/null || true)
+  if [[ -n "${tagopts}" ]] && ! grep -qv -- '--no-tags' <<<"${tagopts}"; then
+    notags+=("${project}")
+  fi
+done
+
+report() {
+  local label="$1"; shift
+  local hint="$1"; shift
+  local -a items=("$@")
+  [[ ${#items[@]} -eq 0 ]] && return 0
+  echo "  ${label}: ${#items[@]}"
+  if [[ "${quiet}" != "true" ]]; then
+    printf '      %s\n' "${items[@]}"
+  fi
+  echo "      -> ${hint}"
+  return 1
+}
+
+echo "check-local-clones: ${total} Git projects under ${maven_dir}"
+problems=0
+report "shallow"       "git -C <project> fetch --unshallow"                    ${shallow[@]+"${shallow[@]}"}   || problems=1
+report "single-branch" "git remote set-branches origin '*' && git fetch --all" ${single[@]+"${single[@]}"}    || problems=1
+report "no tags"       "git fetch --tags"                                      ${notags[@]+"${notags[@]}"}    || problems=1
+report "no remote"     "add a remote, or exclude the project from the scan"    ${noorigin[@]+"${noorigin[@]}"}  || problems=1
+report "no .git"       "not a Git checkout -- ignore if intentional"           ${missing[@]+"${missing[@]}"}   || problems=1
+
+if [[ "${problems}" -eq 0 ]]; then
+  echo "  all clones complete (no shallow / single-branch / no-tags)"
+  exit 0
+fi
+
+echo "  Incomplete clones make the GitHub scan fall back to REST API commit walks."
+if [[ "${STRICT}" == "true" ]]; then
+  exit 1
+fi
+exit 0
