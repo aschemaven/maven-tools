@@ -1,0 +1,156 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# jqa-publish - blue/green publication of a read-only jQAssistant graph.
+#
+# SYNOPSIS
+#     jqa-publish stage <store-dir>   # rsync into the passive slot
+#     jqa-publish switch              # flip the symlink, recreate the container
+#     jqa-publish run <store-dir>     # stage + verify + switch
+#     jqa-publish status
+#     jqa-publish stop
+#
+# DESCRIPTION
+#     Simulates locally what will later happen against the public server: the
+#     graph is produced elsewhere (read-write) and only ever SHIPPED here. The
+#     published instance never writes -- it starts with
+#     server.databases.default_to_read_only=true, so no write path exists at all.
+#     That is a stronger guarantee than any permission model Neo4j Community
+#     could offer: it has no roles (SHOW ROLES is unsupported) and no runtime
+#     ALTER DATABASE ... SET ACCESS.
+#
+#     Layout:
+#
+#       jqassistant/publish/
+#         current -> blue        symlink to the live slot
+#         blue/data              being served
+#         green/data             passive, receives the rsync
+#
+#     Staging writes to the PASSIVE slot, which no process has open -- so the
+#     live graph is never touched and cannot be corrupted by a partial transfer.
+#     A failed shipment simply leaves the symlink where it is.
+#
+# IMPORTANT
+#     The container must be RECREATED, not restarted. Docker resolves a
+#     symlinked bind mount once, when the mount is created, and stores the real
+#     path; `docker restart` therefore keeps serving the OLD slot while looking
+#     perfectly healthy. Measured, not assumed.
+#
+# ENVIRONMENT
+#   PUBLISH_BOLT_PORT  default 7688 (7687 belongs to the read-write instance)
+#   PUBLISH_HTTP_PORT  default 7475
+#   NEO4J_IMAGE        default neo4j:5.26.20-community
+#   PUBLISH_HEAP       default 2G
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+
+: "${PUBLISH_BOLT_PORT:=7688}"
+: "${PUBLISH_HTTP_PORT:=7475}"
+: "${NEO4J_IMAGE:=neo4j:5.26.20-community}"
+: "${PUBLISH_HEAP:=2G}"
+
+container=jqa-neo4j-published
+base="${root}/jqassistant/publish"
+current="${base}/current"
+
+die() { echo "$*" >&2; exit 1; }
+stamp() { date '+%F %T'; }
+
+init_layout() {
+  mkdir -p "${base}/blue/data" "${base}/green/data"
+  [[ -L "${current}" ]] || ln -sfn "${base}/blue" "${current}"
+}
+
+active_slot() { basename "$(readlink "${current}")"; }
+passive_slot() { [[ "$(active_slot)" == "blue" ]] && echo green || echo blue; }
+
+cmd_stage() {
+  local src="${1:-}"
+  [[ -n "${src}" ]] || die "usage: jqa-publish stage <store-dir>"
+  [[ -d "${src}/data" ]] || die "not a jQAssistant store (no data/): ${src}"
+  init_layout
+  local slot; slot=$(passive_slot)
+  echo "[$(stamp)] staging $(basename "${src}") -> ${slot} (active: $(active_slot))"
+  # --delete so the passive slot matches the source exactly and keeps no
+  # leftovers from an older generation.
+  # --no-whole-file forces the delta algorithm locally too; over the network it
+  # is the default anyway. "Literal data" is what actually goes over the wire --
+  # "Total transferred file size" would only be the size of the touched files
+  # and therefore misleading.
+  rsync -a --delete --no-whole-file --stats "${src}/data/" "${base}/${slot}/data/" \
+    | grep -E 'Literal data|Matched data|Total file size' | sed 's/^/    /'
+}
+
+cmd_verify() {
+  local slot="${1:-$(passive_slot)}"
+  local probe=jqa-neo4j-verify
+  docker rm -f "${probe}" >/dev/null 2>&1
+  docker run -d --name "${probe}" -p 7699:7687 -e NEO4J_AUTH=none \
+    -e NEO4J_PLUGINS='["apoc"]' -v "${base}/${slot}/data:/data" \
+    "${NEO4J_IMAGE}" >/dev/null || die "probe container failed"
+  local i n=0
+  for i in $(seq 1 40); do
+    n=$(docker exec "${probe}" cypher-shell -a bolt://localhost:7687 --format plain \
+          "MATCH (n) RETURN count(n)" 2>/dev/null | tail -1)
+    [[ "${n}" =~ ^[0-9]+$ ]] && break
+    sleep 5
+  done
+  docker rm -f "${probe}" >/dev/null 2>&1
+  [[ "${n}" =~ ^[0-9]+$ && "${n}" -gt 0 ]] || die "verification failed for slot ${slot} (nodes=${n:-none})"
+  echo "[$(stamp)] slot ${slot} verified: ${n} nodes"
+}
+
+cmd_switch() {
+  init_layout
+  local slot; slot=$(passive_slot)
+  ln -sfn "${base}/${slot}" "${current}"
+  echo "[$(stamp)] current -> ${slot}"
+  # RECREATE, not restart -- see the header.
+  docker rm -f "${container}" >/dev/null 2>&1
+  docker run -d --name "${container}" \
+    --restart unless-stopped \
+    -p "${PUBLISH_HTTP_PORT}:7474" -p "${PUBLISH_BOLT_PORT}:7687" \
+    -e NEO4J_AUTH=none \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_server_databases_default__to__read__only=true \
+    -e NEO4J_server_memory_heap_max__size="${PUBLISH_HEAP}" \
+    -v "${current}/data:/data" \
+    "${NEO4J_IMAGE}" >/dev/null || die "docker run failed"
+  local i
+  for i in $(seq 1 60); do
+    if docker exec "${container}" cypher-shell -a bolt://localhost:7687 "RETURN 1" >/dev/null 2>&1; then
+      echo "[$(stamp)] published on bolt://localhost:${PUBLISH_BOLT_PORT} (nach ~$((i*2))s)"; return 0
+    fi
+    sleep 2
+  done
+  die "published instance did not become ready"
+}
+
+cmd_status() {
+  [[ -L "${current}" ]] && echo "current -> $(active_slot)   (passiv: $(passive_slot))"
+  for s in blue green; do
+    [[ -d "${base}/${s}/data" ]] && echo "  ${s}: $(du -sh "${base}/${s}/data" 2>/dev/null | cut -f1)"
+  done
+  if docker ps --format '{{.Names}}' | grep -qx "${container}"; then
+    echo "container: $(docker ps --filter "name=${container}" --format '{{.Status}}')"
+    docker exec "${container}" cypher-shell -a bolt://localhost:7687 --format plain \
+      "MATCH (n) RETURN count(n) AS nodes" 2>/dev/null | tail -1 | sed 's/^/nodes: /'
+    echo -n "read-only: "
+    docker exec "${container}" cypher-shell -a bolt://localhost:7687 \
+      "CREATE (:WriteProbe)" >/dev/null 2>&1 && echo "NEIN - Instanz ist schreibbar!" || echo "ja"
+  else
+    echo "container: not running"
+  fi
+}
+
+case "${1:-status}" in
+  stage)  shift; cmd_stage "${1:-}" ;;
+  verify) shift; cmd_verify "${1:-}" ;;
+  switch) cmd_switch ;;
+  run)    shift; src="${1:-}"; cmd_stage "${src}" && cmd_verify && cmd_switch ;;
+  status) cmd_status ;;
+  stop)   docker rm -f "${container}" >/dev/null 2>&1 && echo stopped || echo "was not running" ;;
+  *) echo "usage: jqa-publish stage <store>|verify|switch|run <store>|status|stop" >&2; exit 1 ;;
+esac

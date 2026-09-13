@@ -1,0 +1,176 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# jqa-scratch - writable playground based on the pipeline graph.
+#
+# SYNOPSIS
+#     jqa-scratch reset [<store-dir>]   # refill from the pipeline store + replay
+#     jqa-scratch exec <cypher>         # run and record
+#     jqa-scratch promote <file> [<n>]  # recording -> repeatable script
+#     jqa-scratch apply                 # re-apply cypher/*.cypher
+#     jqa-scratch start | stop | status
+#     jqa-scratch shell                 # cypher-shell inside the scratch instance
+#
+# DESCRIPTION
+#     The published instance is deliberately read-only; it is the result of the
+#     pipeline and should stay that way. Own experiments -- typically trying out
+#     persistence that should later become jQAssistant rules -- run here, on a
+#     second, writable instance.
+#
+#     The cycle is deliberately closed:
+#
+#       reset   copy of the pipeline store, container recreated, then `apply`
+#               automatically -- the playground is reproducible rather than
+#               historically grown.
+#       exec    runs a statement AND appends it to the session log
+#               scratch/recorded/session-<date>.cypher. That is the recording.
+#       promote takes a recorded file and turns it into a numbered replay script
+#               under scratch/cypher/.
+#       apply   replays scratch/cypher/*.cypher in name order.
+#               From there it is a short step to a real rule in
+#               jqassistant/rules/.
+#
+# WHY NOT FROM THE QUERY LOG
+#     The obvious approach would be to harvest all writing statements from
+#     Neo4j's query.log automatically. That does not work with Community:
+#     db.logs.query.enabled can be set (SHOW SETTINGS reports isExplicitlySet=
+#     TRUE), but no query.log is ever written -- query logging is Enterprise.
+#     Recording therefore happens at the call site, not in the server.
+#
+#     Consequence: statements that do NOT go through `jqa-scratch exec` -- for
+#     example from an MCP session or straight from cypher-shell -- are not
+#     captured. Whoever wants to keep them puts them under scratch/cypher/
+#     themselves.
+#
+# ENVIRONMENT
+#   SCRATCH_BOLT_PORT  default 7689
+#   SCRATCH_HTTP_PORT  default 7476
+#   SCRATCH_HEAP       default 4G
+#   NEO4J_IMAGE        default neo4j:5.26.20-community
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+
+: "${SCRATCH_BOLT_PORT:=7689}"
+: "${SCRATCH_HTTP_PORT:=7476}"
+: "${SCRATCH_HEAP:=4G}"
+: "${NEO4J_IMAGE:=neo4j:5.26.20-community}"
+
+container=jqa-neo4j-scratch
+base="${root}/jqassistant/scratch"
+data="${base}/data"
+cypher_dir="${base}/cypher"
+recorded_dir="${base}/recorded"
+
+die() { echo "$*" >&2; exit 1; }
+stamp() { date '+%F %T'; }
+cs() { docker exec -i "${container}" cypher-shell -a bolt://localhost:7687 "$@"; }
+
+default_source() {
+  # Prefer the pipeline's work store, else the most recently published one.
+  for c in "${root}/jqassistant/store-work" \
+           "$(readlink "${root}/jqassistant/publish/current" 2>/dev/null)" \
+           "${root}/jqassistant/store-stage1"; do
+    [[ -n "${c}" && -d "${c}/data" ]] && { echo "${c}"; return; }
+  done
+  return 1
+}
+
+cmd_start() {
+  [[ -d "${data}" ]] || die "no scratch data yet -- run 'jqa-scratch reset' first"
+  docker ps --format '{{.Names}}' | grep -qx "${container}" && { echo "already running"; return 0; }
+  docker rm -f "${container}" >/dev/null 2>&1
+  docker run -d --name "${container}" \
+    --restart unless-stopped \
+    -p "${SCRATCH_HTTP_PORT}:7474" -p "${SCRATCH_BOLT_PORT}:7687" \
+    -e NEO4J_AUTH=none \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_server_memory_heap_max__size="${SCRATCH_HEAP}" \
+    -v "${data}:/data" \
+    "${NEO4J_IMAGE}" >/dev/null || die "docker run failed"
+  local i
+  for i in $(seq 1 60); do
+    cs "RETURN 1" >/dev/null 2>&1 && { echo "[$(stamp)] scratch ready: bolt://localhost:${SCRATCH_BOLT_PORT}"; return 0; }
+    sleep 2
+  done
+  die "scratch instance did not become ready"
+}
+
+cmd_stop() { docker rm -f "${container}" >/dev/null 2>&1 && echo stopped || echo "was not running"; }
+
+cmd_reset() {
+  local src="${1:-$(default_source)}"
+  [[ -n "${src}" && -d "${src}/data" ]] || die "no usable source store (tried store-work, publish/current, store-stage1)"
+  echo "[$(stamp)] reset from $(basename "${src}")"
+  cmd_stop >/dev/null
+  mkdir -p "${cypher_dir}" "${recorded_dir}"
+  rm -rf "${data}.old"; [[ -d "${data}" ]] && mv "${data}" "${data}.old"
+  rsync -a "${src}/data/" "${data}/" || die "copy failed"
+  rm -rf "${data}.old"
+  cmd_start
+  cmd_apply
+}
+
+cmd_apply() {
+  mkdir -p "${cypher_dir}"
+  local f n=0
+  shopt -s nullglob
+  for f in "${cypher_dir}"/*.cypher; do
+    echo "[$(stamp)] apply $(basename "${f}")"
+    cs < "${f}" >/dev/null || die "failed: ${f}"
+    n=$((n + 1))
+  done
+  shopt -u nullglob
+  echo "[$(stamp)] ${n} script(s) applied"
+}
+
+cmd_exec() {
+  local q="${*:-}"
+  [[ -n "${q}" ]] || die "usage: jqa-scratch exec <cypher>"
+  mkdir -p "${recorded_dir}"
+  local log="${recorded_dir}/session-$(date '+%Y%m%d').cypher"
+  cs "${q}" || die "statement failed -- not recorded"
+  printf '%s;\n' "${q%;}" >> "${log}"
+  echo "[$(stamp)] recorded in $(basename "${log}")"
+}
+
+cmd_promote() {
+  local src="${1:-}" name="${2:-}"
+  [[ -n "${src}" ]] || die "usage: jqa-scratch promote <recorded-file> [<name>]"
+  [[ -f "${src}" ]] || src="${recorded_dir}/${src}"
+  [[ -f "${src}" ]] || die "not found: ${1}"
+  mkdir -p "${cypher_dir}"
+  local n; n=$(printf '%03d' $(( $(ls -1 "${cypher_dir}"/*.cypher 2>/dev/null | wc -l | tr -d ' ') * 10 + 10 )))
+  local target="${cypher_dir}/${n}-${name:-$(basename "${src}" .cypher)}.cypher"
+  cp "${src}" "${target}"
+  echo "[$(stamp)] ${target}"
+  echo "    Vor dem naechsten Reset pruefen: idempotent? MERGE statt CREATE?"
+}
+
+cmd_status() {
+  if docker ps --format '{{.Names}}' | grep -qx "${container}"; then
+    echo "container: $(docker ps --filter "name=${container}" --format '{{.Status}}')  bolt://localhost:${SCRATCH_BOLT_PORT}"
+    cs --format plain "MATCH (n) RETURN count(n) AS nodes" 2>/dev/null | tail -1 | sed 's/^/nodes: /'
+    echo -n "writable: "
+    cs "CREATE (p:ScratchProbe) DELETE p" >/dev/null 2>&1 && echo yes || echo "NO"
+  else
+    echo "container: not running"
+  fi
+  shopt -s nullglob
+  local a=("${cypher_dir}"/*.cypher) b=("${recorded_dir}"/*.cypher)
+  shopt -u nullglob
+  echo "replay scripts: ${#a[@]}   recorded: ${#b[@]}"
+}
+
+case "${1:-status}" in
+  reset)  shift; cmd_reset "${1:-}" ;;
+  apply)  cmd_apply ;;
+  exec)   shift; cmd_exec "$@" ;;
+  promote) shift; cmd_promote "${1:-}" "${2:-}" ;;
+  start)  cmd_start ;;
+  stop)   cmd_stop ;;
+  status) cmd_status ;;
+  shell)  shift; docker exec -it "${container}" cypher-shell -a bolt://localhost:7687 "$@" ;;
+  *) echo "usage: jqa-scratch reset|exec|promote|apply|start|stop|status|shell" >&2; exit 1 ;;
+esac

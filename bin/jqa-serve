@@ -1,0 +1,161 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# jqa-serve - serve a jQAssistant store from a Neo4j container.
+#
+# SYNOPSIS
+#     jqa-serve start [<store-dir>]
+#     jqa-serve stop
+#     jqa-serve status
+#     jqa-serve promote <store-dir>
+#
+# DESCRIPTION
+#     The embedded jQAssistant store is single-writer and has no network
+#     endpoint: while a scan runs nothing can query it, and nothing can query it
+#     afterwards either without starting a jQAssistant process. This serves a
+#     store through a real Neo4j, which
+#
+#       * makes it reachable for the `jqassistant` MCP server (bolt://localhost:7687),
+#       * enables Neo4j's slow-query log, which the embedded store silently ignores,
+#       * and decouples serving from scanning: the nightly run writes a NEW store
+#         while the previous one stays queryable.
+#
+#     The container NEVER mounts a working store. `promote` copies the store
+#     into jqassistant/store-served/ and Neo4j opens that copy, because Neo4j
+#     writes to whatever it opens (transaction logs, index population). A scan
+#     and the served graph therefore cannot interfere -- neither by file locking
+#     nor by mutating each other's data -- and a scan may target any store at any
+#     time, including the one that was promoted.
+#
+#     The container image version must match the store format. jQAssistant 2.9.0
+#     embeds Neo4j 5.26.20; NEO4J_IMAGE overrides it.
+#
+# COMMANDS
+#   start                Serve the existing copy in jqassistant/store-served.
+#   stop                 Stop and remove the container.
+#   status               Container state, provenance of the copy, node count.
+#   promote <store-dir>  Copy <store-dir> to store-served and restart the
+#                        container. The atomic switch the nightly run performs
+#                        after a successful cycle; a failed run never becomes
+#                        the served graph.
+#
+# ENVIRONMENT
+#   NEO4J_IMAGE     default neo4j:5.26.20-community
+#   NEO4J_BOLT_PORT default 7689 -- the `jqassistant` MCP server points here
+#   NEO4J_HTTP_PORT default 7476
+#
+#   The Neo4j default ports 7687/7474 are DELIBERATELY left free so that any
+#   other project on this machine can start its own jQAssistant instance
+#   without having to stop this one.
+#   NEO4J_HEAP      default 4G
+#
+# NOTES
+#   Neo4j WRITES to the store it opens (transaction logs, index population), so a
+#   served store must never be the target of a concurrent scan. That is exactly
+#   what the store-current indirection prevents.
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+
+: "${NEO4J_IMAGE:=neo4j:5.26.20-community}"
+: "${NEO4J_BOLT_PORT:=7689}"
+: "${NEO4J_HTTP_PORT:=7476}"
+: "${NEO4J_HEAP:=4G}"
+
+container=jqa-neo4j
+served="${root}/jqassistant/store-served"
+
+die() { echo "$*" >&2; exit 1; }
+
+resolve_store() {
+  local s="${1:-${current}}"
+  [[ -d "${s}" ]] || die "Store not found: ${s}"
+  [[ -d "${s}/data" ]] || die "Not a jQAssistant store (no data/): ${s}"
+  cd "${s}" && pwd -P
+}
+
+cmd_start() {
+  local store; store=$(resolve_store "${served}") || exit 1
+  if docker ps --format '{{.Names}}' | grep -qx "${container}"; then
+    echo "Already running. Use 'jqa-serve stop' first."; exit 0
+  fi
+  docker rm -f "${container}" >/dev/null 2>&1
+
+  # APOC: the analysis rules use apoc.text.indexOf. In the embedded store the
+  # jars had to be copied into <store>/plugins by hand; here one variable does it.
+  # --restart unless-stopped: the graph should come back by itself after a
+  # reboot or a Docker restart. The MCP server connects when the LLM session
+  # starts; if Neo4j is gone by then, it only surfaces at the first query.
+  docker run -d --name "${container}" \
+    --restart unless-stopped \
+    -p "${NEO4J_HTTP_PORT}:7474" -p "${NEO4J_BOLT_PORT}:7687" \
+    -e NEO4J_AUTH=none \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_server_memory_heap_max__size="${NEO4J_HEAP}" \
+    -e NEO4J_db_logs_query_enabled=INFO \
+    -e NEO4J_db_logs_query_threshold=1s \
+    -e NEO4J_db_logs_query_plan__description__enabled=true \
+    -v "${store}/data:/data" \
+    "${NEO4J_IMAGE}" >/dev/null || die "docker run failed"
+
+  echo "Starting Neo4j (${NEO4J_IMAGE}) on ${store} ..."
+  local i
+  for i in $(seq 1 60); do
+    if docker exec "${container}" cypher-shell -a bolt://localhost:7687 "RETURN 1" >/dev/null 2>&1; then
+      echo "ready after ~$((i*5))s  bolt://localhost:${NEO4J_BOLT_PORT}  http://localhost:${NEO4J_HTTP_PORT}"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "Did not become ready; see: docker logs ${container}" >&2
+  return 1
+}
+
+cmd_stop() {
+  docker rm -f "${container}" >/dev/null 2>&1 && echo "stopped" || echo "was not running"
+}
+
+cmd_status() {
+  if ! docker ps --format '{{.Names}}' | grep -qx "${container}"; then
+    echo "not running"
+    [[ -f "${served}/PROMOTED" ]] && cat "${served}/PROMOTED"
+    return 1
+  fi
+  [[ -f "${served}/PROMOTED" ]] && cat "${served}/PROMOTED"
+  echo "running: $(docker ps --filter "name=${container}" --format '{{.Image}}  {{.Status}}')"
+  docker inspect "${container}" --format '{{range .Mounts}}store: {{.Source}}{{end}}' 2>/dev/null
+  docker exec "${container}" cypher-shell -a bolt://localhost:7687 --format plain \
+    "MATCH (n) RETURN count(n) AS nodes" 2>/dev/null | tail -1 | sed 's/^/nodes: /'
+}
+
+cmd_promote() {
+  local target="${1:-}"
+  [[ -n "${target}" ]] || die "usage: jqa-serve promote <store-dir>"
+  local store; store=$(resolve_store "${target}") || exit 1
+  local need; need=$(du -sk "${store}/data" | cut -f1)
+  local free; free=$(df -k "${root}" | awk 'NR==2 {print $4}')
+  [[ "${free}" -gt $((need + 5*1024*1024)) ]] \
+    || die "not enough disk: need ~$((need/1024/1024))G plus headroom, have $((free/1024/1024))G"
+
+  cmd_stop
+  echo "copying ${store} -> ${served} ($((need/1024/1024))G) ..."
+  rm -rf "${served}.new" "${served}.old"
+  mkdir -p "${served}.new"
+  cp -R "${store}/data" "${served}.new/data" || die "copy failed"
+  printf 'promoted: %s\nsource:   %s\n' "$(date '+%F %T')" "${store}" > "${served}.new/PROMOTED"
+  # Swap only after the copy succeeded, so an interrupted promote leaves the
+  # previous served graph intact.
+  [[ -d "${served}" ]] && mv "${served}" "${served}.old"
+  mv "${served}.new" "${served}"
+  rm -rf "${served}.old"
+  cmd_start
+}
+
+case "${1:-status}" in
+  start)   shift; cmd_start "${1:-}" ;;
+  stop)    cmd_stop ;;
+  status)  cmd_status ;;
+  promote) shift; cmd_promote "${1:-}" ;;
+  *) echo "usage: jqa-serve start|stop|status|promote" >&2; exit 1 ;;
+esac
