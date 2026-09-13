@@ -1,11 +1,36 @@
 jqassistant:
+  store:
+    embedded:
+      # The analysis rules use apoc.text.indexOf. Previously the APOC jars were
+      # copied into <store>/plugins by hand, which a FRESH store does not have --
+      # and every nightly run now builds a fresh store, so analyze failed with
+      # "Unknown function 'apoc.text.indexOf'". jQAssistant provides APOC itself
+      # when asked.
+      apoc-enabled: true
+      # NO slow-query log here, deliberately -- see the negative result in
+      # docs/modules/arc42/pages/performance-findings.adoc. Neo4j's
+      # db.logs.query.* settings are an Enterprise feature and are silently
+      # ignored by the Community edition jQAssistant embeds, so configuring
+      # them only creates the illusion of observability. Both hot spots found
+      # so far (an unbounded "-[*]->" traversal and a missing index on
+      # Commit.sha) were located by thread sampling and EXPLAIN instead.
+  repositories:
+    remotes:
+      github-ascheman:
+        url: https://maven.pkg.github.com/ascheman/jqa-groovy-plugin
+        username: THIS-DOES-NOT-MATTER
+        password: ${GITHUB_TOKEN}
+        releases:
+          enabled: false
+        snapshots:
+          enabled: true
   plugins:
     - group-id: net.aschemann.jqassistant.plugins
       artifact-id: jqa-groovy-plugin
       version: 0.2.0-SNAPSHOT
     - group-id: de.kontext-e.jqassistant.plugin
       artifact-id: jqassistant.plugin.git
-      version: 2.4.0
+      version: 2.4.3-SNAPSHOT
   scan:
     continue-on-error: true
     # We need this with the Maven scanner as it only scans target/ by default

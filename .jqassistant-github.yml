@@ -1,11 +1,26 @@
 jqassistant:
+  store:
+    embedded:
+      # The analysis rules use apoc.text.indexOf. Previously the APOC jars were
+      # copied into <store>/plugins by hand, which a FRESH store does not have --
+      # and every nightly run now builds a fresh store, so analyze failed with
+      # "Unknown function 'apoc.text.indexOf'". jQAssistant provides APOC itself
+      # when asked.
+      apoc-enabled: true
+      # NO slow-query log here, deliberately -- see the negative result in
+      # docs/modules/arc42/pages/performance-findings.adoc. Neo4j's
+      # db.logs.query.* settings are an Enterprise feature and are silently
+      # ignored by the Community edition jQAssistant embeds, so configuring
+      # them only creates the illusion of observability. Both hot spots found
+      # so far (an unbounded "-[*]->" traversal and a missing index on
+      # Commit.sha) were located by thread sampling and EXPLAIN instead.
   plugins:
     - group-id: de.kontext-e.jqassistant.plugin
       artifact-id: jqassistant.plugin.git
-      version: 2.4.0
+      version: 2.4.3-SNAPSHOT
     - group-id: org.jqassistant.plugin
       artifact-id: jqassistant-github-plugin
-      version: GAsc-1.3.2-SNAPSHOT
+      version: GAsc-1.3.6-SNAPSHOT
   scan:
     continue-on-error: true
     include:
