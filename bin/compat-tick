@@ -8,7 +8,7 @@ set -eu -o pipefail
 #   compat-tick
 #
 # DESCRIPTION
-#   One hourly tick (via launchd; see launchd/eu.aschemann.maven-compat.plist):
+#   One hourly tick (via launchd; see launchd/net.aschemann.maven-compat.plist):
 #     1. sync the maven/ source tree (only a real `repo` tree; auto-skipped for
 #        test checkouts without .repo)
 #     2. detect what changed since the last tick, on TWO axes:

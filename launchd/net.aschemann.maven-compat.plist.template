@@ -3,12 +3,12 @@
   launchd agent that fires the compat-matrix tick hourly.
 
   Install (per machine):
-    sed "s#__TOOLS_ROOT__#$PWD#" launchd/eu.aschemann.maven-compat.plist.template \
-      > ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
-    launchctl load ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
+    sed "s#__TOOLS_ROOT__#$PWD#" launchd/net.aschemann.maven-compat.plist.template \
+      > ~/Library/LaunchAgents/net.aschemann.maven-compat.plist
+    launchctl load ~/Library/LaunchAgents/net.aschemann.maven-compat.plist
 
   Uninstall:
-    launchctl unload ~/Library/LaunchAgents/eu.aschemann.maven-compat.plist
+    launchctl unload ~/Library/LaunchAgents/net.aschemann.maven-compat.plist
 
   compat-tick decides per mach.txt role whether to actually build: a
   "controller" only builds in its nightly+idle window, a "runner" builds
@@ -17,7 +17,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>eu.aschemann.maven-compat</string>
+  <string>net.aschemann.maven-compat</string>
 
   <key>ProgramArguments</key>
   <array>
