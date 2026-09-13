@@ -65,7 +65,7 @@ for name in "${variants[@]}"; do
   # --- Maven binary -------------------------------------------------------
   # Stable, installed version -> symlink. Otherwise (SNAPSHOT / branch distro)
   # leave it to a future prepare step and warn.
-  home="$(sdkman_maven_home "${version}")"
+  home="$(sdkman_maven_home "${version}" || true)"
   if [[ -n "${home}" ]]; then
     ln -sfn "${home}" "${v_root}/maven"
     mvn_note="maven -> ${home}"

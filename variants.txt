@@ -38,3 +38,17 @@ m4-rc5         4.0.0-rc-5       21   -
 
 # --- 4.x-native lines (Deliverable 3): carry a branch -> worktree -------------
 # m4-native-jar  <pinned>       21   master
+
+# --- default-plugin-version refresh spike (temporary; see maven-bugfixing
+#     in-progress/maven-core-default-plugin-version-refresh.adoc) -------------
+# Locally built distributions carrying the bumped lifecycle plugin defaults
+# (latest stable 3.x). The binary is a symlink into the spike's dist dir, so
+# variant-setup keeps it ("already present").
+dpv-39         3.9.17-SNAPSHOT  21   -
+dpv-310        3.10.0-SNAPSHOT  21   -
+dpv-40         4.0.0-SNAPSHOT   21   -
+dpv-41         4.1.0-SNAPSHOT   21   -
+# Stock 4.0.0-rc-6 (released, unbumped defaults) -- control column for the
+# default-plugin-version spike: distinguishes "our bump broke it" from
+# "Maven 4 breaks it anyway".
+m4-rc6         4.0.0-rc-6       21   -
