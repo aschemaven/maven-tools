@@ -266,15 +266,23 @@ variant_jdk() {
 }
 
 # Resolve a JAVA_HOME for a JDK major version, preferring SDKman. Picks the
-# highest installed build whose name starts with "<major>" (e.g. major 21 ->
-# 21.0.10-tem). Echoes the home dir, or the empty string if none is found.
+# highest installed build of that major from the preferred vendor (default
+# Temurin), e.g. major 21 -> 21.0.10-tem. Echoes the home dir, or the empty
+# string if none is found.
+#
+# The vendor filter exists to keep other vendors OUT, not to support them:
+# nothing here targets GraalVM, Zulu or Amazon, but builds of all three sit in
+# ~/.sdkman next to Temurin, and a plain "sort -V | tail" hands the build to
+# whoever happens to ship the highest patch level. Falls back to any vendor
+# rather than returning nothing.
 find_java_home() {
-  local major="$1"
+  local major="$1" vendor="${2:-tem}"
   [[ -z "${major}" ]] && return
   local base="${HOME}/.sdkman/candidates/java"
   [[ -d "${base}" ]] || return
   local best
-  best=$(ls -1 "${base}" 2>/dev/null | grep -E "^${major}([.-]|$)" | sort -V | tail -1)
+  best=$(ls -1 "${base}" 2>/dev/null | grep -E "^${major}([.-]|$)" | grep -E -- "-${vendor}\$" | sort -V | tail -1)
+  [[ -z "${best}" ]] && best=$(ls -1 "${base}" 2>/dev/null | grep -E "^${major}([.-]|$)" | sort -V | tail -1)
   [[ -n "${best}" ]] && echo "${base}/${best}"
 }
 
@@ -324,7 +332,29 @@ fi
 if [[ -z "${JDK21_PROJECTS+x}" ]]; then
   JDK21_PROJECTS=$(read_project_list_file "${root}/jdk21-projects.txt")
 fi
-: "${JDK21_HOME:=${HOME}/.sdkman/candidates/java/21.0.10-tem}"
+# Resolved, not pinned: a literal default silently rots as soon as a newer
+# 21.0.x is installed, and every machine then builds against a different JDK.
+: "${JDK21_HOME:=$(find_java_home 21)}"
+
+# Baseline JDK for everything that does not carry a per-variant or per-project
+# override. Without this the pipeline inherits SDKman's "current", which is a
+# per-machine, mutable symlink -- godecane pointed at 25.0.4-tem while
+# godestorm pointed at 17.0.7-tem, so the same commit built against different
+# JDKs. .sdkmanrc cannot fill this role: "sdk env" only fires from an
+# interactive shell hook and never under launchd.
+#
+# Pin the MAJOR version, resolve the patch level. Set JQA_JDK_HOME to override
+# the lookup entirely.
+: "${JQA_JDK_MAJOR:=25}"
+: "${JQA_JDK_VENDOR:=tem}"
+: "${JQA_JDK_HOME:=$(find_java_home "${JQA_JDK_MAJOR}" "${JQA_JDK_VENDOR}")}"
+if [[ -n "${JQA_JDK_HOME}" ]]; then
+  export JAVA_HOME="${JQA_JDK_HOME}"
+  export PATH="${JAVA_HOME}/bin:${PATH}"
+else
+  echo "WARNING: no JDK ${JQA_JDK_MAJOR} (${JQA_JDK_VENDOR}) under ~/.sdkman;" >&2
+  echo "         falling back to inherited JAVA_HOME=${JAVA_HOME:-<unset>}" >&2
+fi
 
 # Filter PROJECTS by EXCLUDE_PROJECTS, preserving order. The exclude list
 # applies to both the default project.list and a user-supplied PROJECTS

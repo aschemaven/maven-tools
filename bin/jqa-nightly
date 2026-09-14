@@ -108,6 +108,54 @@ for a in "$@"; do
   esac
 done
 
+# ---------------------------------------------------------------------------
+# Keep the pinned JDK major at its newest Temurin build.
+#
+# Pinning a major without ever refreshing it means drifting further behind
+# every month; pinning an exact patch level rots the moment a new one lands.
+# This asks SDKman what the newest <major> build from the preferred vendor is
+# and installs it quietly if it is missing.
+#
+# Called ONCE per run from jqa-nightly -- deliberately not from
+# common-functions.sh, which is sourced by every sub-script and would turn one
+# network call into dozens.
+#
+# Never fails the run: no network, no SDKman, unknown platform -> return 0 and
+# keep using what is installed. Never touches SDKman's "current" symlink, so
+# the machine's own default is left alone.
+# ---------------------------------------------------------------------------
+ensure_latest_jdk() {
+  [[ "${JQA_JDK_AUTOUPDATE:-true}" == "true" ]] || return 0
+  local major="${JQA_JDK_MAJOR:-25}" vendor="${JQA_JDK_VENDOR:-tem}" plat
+  case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64)  plat=darwinarm64 ;;
+    Darwin/x86_64) plat=darwinx64 ;;
+    Linux/x86_64)  plat=linuxx64 ;;
+    Linux/arm64|Linux/aarch64) plat=linuxarm64 ;;
+    *) return 0 ;;
+  esac
+
+  local remote
+  remote=$(curl -fsS --max-time 20 \
+    "https://api.sdkman.io/2/candidates/java/${plat}/versions/list?current=&installed=" 2>/dev/null \
+    | grep -oE "${major}\.[0-9.]+-${vendor}" | sort -V -u | tail -1)
+  [[ -z "${remote}" ]] && return 0
+  [[ -d "${HOME}/.sdkman/candidates/java/${remote}" ]] && return 0
+
+  echo "[$(stamp)] newer JDK available: ${remote} -- installing"
+  # shellcheck disable=SC1091
+  source "${HOME}/.sdkman/bin/sdkman-init.sh" 2>/dev/null || return 0
+  # "n" declines making it the default; this machine's own current stays put.
+  if echo n | sdk install java "${remote}" >/dev/null 2>&1; then
+    echo "[$(stamp)] installed ${remote}"
+    JQA_JDK_HOME="$(find_java_home "${major}" "${vendor}")"
+    export JAVA_HOME="${JQA_JDK_HOME}"
+    export PATH="${JAVA_HOME}/bin:${PATH}"
+  else
+    echo "[$(stamp)] install of ${remote} failed -- keeping $(basename "${JAVA_HOME}")" >&2
+  fi
+}
+
 state_dir="${root}/var"; mkdir -p "${state_dir}"
 heads_prev="${state_dir}/nightly-heads.tsv"
 heads_cur="${state_dir}/nightly-heads.current"
@@ -201,6 +249,10 @@ sync_manifest() {
   fi
   return 0
 }
+
+# Refresh the pinned JDK major before any stage runs, so the whole run uses
+# one JVM rather than switching mid-flight.
+ensure_latest_jdk
 
 if [[ "${dry}" == "true" ]]; then
   echo "[dry-run] would run 'repo sync'"
