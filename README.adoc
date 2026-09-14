@@ -1,0 +1,15 @@
+= Pipeline metrics
+
+Append-only time series written by `bin/jqa-nightly` after every run.
+This branch carries data only; it has its own root and shares no history with the code branches.
+
+One directory per host.
+Two machines write here, and separating them means a push never has to merge file contents -- each only ever touches its own subtree.
+
+`jqa-timings.tsv`:: one row per stage (run_id, ended_at, stage, seconds, rc, host, store)
+`jqa-metrics.tsv`:: one row per run and metric (run_id, ended_at, stage, metric, value)
+`project-timings.tsv`:: one row per project build or scan (ended_at, task, project, seconds, status, load1, variant)
+
+The series exist to make regressions visible: the GitHub stage falling from 199 to 33 minutes, and the scan slowing from 66 minutes to seven hours under CPU contention, were both read off these files.
+
+Disposable -- nothing here is critical, and the branch can be deleted and started over.
