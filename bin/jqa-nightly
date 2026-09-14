@@ -250,6 +250,21 @@ sync_manifest() {
   return 0
 }
 
+# --- ssh agent under launchd -----------------------------------------------
+# A scheduled run gets no SSH agent in its environment, so every git push over
+# SSH dies with "Permission denied (publickey)". That would not fail the run --
+# publish_metrics falls back to a local-only commit -- so the data branch would
+# simply stop arriving on GitHub without anyone noticing.
+#
+# macOS keeps the agent socket in the per-user launchd environment. Take it
+# from there when the shell did not provide one. Verified: with this socket and
+# an otherwise empty environment, github.com authenticates.
+if [[ -z "${SSH_AUTH_SOCK:-}" ]] && command -v launchctl >/dev/null 2>&1; then
+  _sock=$(launchctl getenv SSH_AUTH_SOCK 2>/dev/null) || _sock=""
+  [[ -n "${_sock}" ]] && export SSH_AUTH_SOCK="${_sock}"
+  unset _sock
+fi
+
 # --- metrics publication ---------------------------------------------------
 # The time series are append-only, so tracking them on a code branch dirties
 # the worktree after every single run. They live on the orphan branch "data"
