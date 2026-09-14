@@ -250,6 +250,44 @@ sync_manifest() {
   return 0
 }
 
+# --- metrics publication ---------------------------------------------------
+# The time series are append-only, so tracking them on a code branch dirties
+# the worktree after every single run. They live on the orphan branch "data"
+# instead: own root, no code history, disposable.
+#
+# One directory per host. Both machines write here, and keeping their subtrees
+# apart means a push never has to merge file contents, only replay commits.
+publish_metrics() {
+  local wt
+  wt=$(git -C "${root}" worktree list --porcelain 2>/dev/null \
+       | awk '/^worktree /{p=$2} /^branch refs\/heads\/data$/{print p; exit}')
+  if [[ -z "${wt}" || ! -d "${wt}" ]]; then
+    echo "[$(stamp)] no 'data' worktree -- metrics stay local"
+    return 0
+  fi
+
+  local host; host=$(hostname -s)
+  mkdir -p "${wt}/${host}"
+  cp -f "${root}"/metrics/*.tsv "${wt}/${host}/" 2>/dev/null || return 0
+
+  (
+    cd "${wt}" || exit 0
+    git add -A "${host}" >/dev/null 2>&1
+    if git diff --cached --quiet; then
+      echo "[$(stamp)] metrics unchanged -- nothing to publish"
+      exit 0
+    fi
+    git commit -q -m "Update pipeline metrics (${host}, $(date -u '+%Y-%m-%dT%H:%MZ'))" || exit 0
+    # Rebase first: the other machine may have appended since the last push.
+    git pull --rebase -q origin data >/dev/null 2>&1 || true
+    if git push -q origin data >/dev/null 2>&1; then
+      echo "[$(stamp)] metrics published to branch 'data'"
+    else
+      echo "[$(stamp)] metrics committed locally; push to 'data' failed" >&2
+    fi
+  )
+}
+
 # Refresh the pinned JDK major before any stage runs, so the whole run uses
 # one JVM rather than switching mid-flight.
 ensure_latest_jdk
@@ -403,4 +441,5 @@ fi
 
 cp -f "${heads_cur}" "${heads_prev}"
 ./bin/jqa-timings collect >/dev/null 2>&1 || true
+publish_metrics
 finish OK complete "${logdir}"

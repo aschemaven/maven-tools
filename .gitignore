@@ -17,9 +17,12 @@ target/
 tmp/
 variants/
 # Regenerable snapshots -- safe to delete at any time. The append-only time
-# series live in metrics/ (tracked) and the scheduler state in var/ (ignored),
-# so wiping reports/ costs nothing.
+# series are published to the orphan branch "data" (one directory per host) and
+# the scheduler state lives in var/, so wiping reports/ costs nothing.
 reports/
+# Written every run and published to the "data" branch by jqa-nightly; tracking
+# them here would dirty the worktree after every single night.
+metrics/
 # Scheduler state: last-seen refs and last-run status. Regenerable -- losing it
 # just makes the next nightly build every project once.
 var/
