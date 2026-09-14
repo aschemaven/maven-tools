@@ -143,6 +143,29 @@ run_stage() {
   echo "---"
 } >>"${timing}"
 
+# --- fail fast on a dead GitHub credential ---------------------------------
+# The scanner plugin does NOT fail on a rejected token: GitHubIssueScannerPlugin
+# catches the IOException and retries anonymously, which caps the run at 60
+# requests per hour. That looks like "slow", not "broken" -- it burned two days
+# across both machines before anyone noticed. Two seconds of checking up front
+# turns it into an immediate, named failure.
+require_github_auth() {
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+    -H "Authorization: token ${GITHUB_OAUTH:-}" https://api.github.com/user 2>/dev/null)
+  case "${code}" in
+    200) echo "[$(date '+%F %T')] GitHub credential accepted" ;;
+    000) echo "WARNING: api.github.com unreachable -- proceeding anyway" >&2 ;;
+    *)
+      echo "FATAL: GitHub rejected the credential (HTTP ${code:-none})." >&2
+      echo "       GITHUB_OAUTH is ${GITHUB_OAUTH:+set (${#GITHUB_OAUTH} chars)}${GITHUB_OAUTH:-unset}." >&2
+      echo "       Refresh it with:" >&2
+      echo "         env -u GITHUB_TOKEN -u GITHUB_OAUTH gh auth login --with-token" >&2
+      exit 1
+      ;;
+  esac
+}
+
 for stage in "${stages[@]}"; do
   case "${stage}" in
     build)
@@ -154,6 +177,7 @@ for stage in "${stages[@]}"; do
       run_stage "${stage}" ./bin/run-jqa ${store_opt} "${stage}"
       ;;
     github)
+      require_github_auth
       acquire_cache_lock
       trap release_cache_lock EXIT
       # shellcheck disable=SC2086
