@@ -52,3 +52,9 @@ dpv-41         4.1.0-SNAPSHOT   21   -
 # default-plugin-version spike: distinguishes "our bump broke it" from
 # "Maven 4 breaks it anyway".
 m4-rc6         4.0.0-rc-6       21   -
+
+# --- plain 4.0.x line (next RC candidate) ------------------------------------
+# The distribution is materialised from the nightly build by install-maven-dist;
+# see maven-dists.txt for why the candidate is named after the branch and not
+# after the 4.0.0-SNAPSHOT the build reports.
+m4-40x         4.0.x-SNAPSHOT   21   -
