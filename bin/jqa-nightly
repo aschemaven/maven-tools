@@ -250,6 +250,40 @@ sync_manifest() {
   return 0
 }
 
+# --- store retention -------------------------------------------------------
+# Every run builds a dated store and nothing ever removed the superseded ones.
+# Three nights left 12 GB behind, and on a volume at 96 per cent that costs
+# scan throughput, not merely space: the same project went from 75 to 880
+# seconds once the disk filled up.
+#
+# A store is disposable as soon as the next one has been published, because
+# jqa-publish holds independent copies in its blue/green slots. Keeping two
+# leaves one to fall back on.
+#
+# No "head -n -N" here: that is a GNU extension and this runs on BSD head.
+prune_stores() {
+  local keep="${JQA_STORE_KEEP:-2}" dir="${root}/jqassistant"
+  local -a stores=()
+  local s
+  while IFS= read -r s; do
+    [[ -d "${s}" ]] && stores+=("${s}")
+  done < <(ls -1d "${dir}"/store-* 2>/dev/null | sort)
+
+  local n=${#stores[@]}
+  (( n <= keep )) && return 0
+
+  local i freed=0
+  for (( i = 0; i < n - keep; i++ )); do
+    s="${stores[$i]}"
+    # Never remove the store this run just wrote, whatever the sort order says.
+    [[ "${s}" == "${store_dir:-}" ]] && continue
+    echo "[$(stamp)] pruning superseded store $(basename "${s}")"
+    rm -rf "${s}" && freed=$((freed + 1))
+  done
+  (( freed > 0 )) && echo "[$(stamp)] pruned ${freed} store(s), keeping ${keep}"
+  return 0
+}
+
 # --- ssh agent under launchd -----------------------------------------------
 # A scheduled run gets no SSH agent in its environment, so every git push over
 # SSH dies with "Permission denied (publickey)". That would not fail the run --
@@ -427,6 +461,7 @@ run_stage analyze || finish FAILED analyze "${logdir}"
 # step fails, the previous version stays online unchanged.
 if [[ "${PUBLISH:-true}" == "true" ]]; then
   ./bin/jqa-publish run "${store_dir}" || finish FAILED publish "${logdir}"
+  prune_stores
 fi
 
 if [[ "${rebuild}" == "true" ]]; then
