@@ -1,0 +1,135 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# install-maven-dist - make built Maven distributions usable as SDKman candidates.
+#
+# SYNOPSIS
+#     install-maven-dist [--force] [<version> ...]
+#
+# DESCRIPTION
+#     Reads maven-dists.txt ("<sdkman-version> <project-path>") and, for each
+#     entry, unpacks the distribution archive the project's build produced and
+#     links it into ~/.sdkman/candidates/maven/<version>, which is exactly where
+#     variant-setup's sdkman_maven_home() looks.
+#
+#     This is the "future prepare step" variant-setup warns about when a variant
+#     names a SNAPSHOT version: SDKman has no such candidate, so the matrix could
+#     never bind those columns.
+#
+#     NO BUILD HAPPENS HERE. The listed projects are among the 125 the nightly
+#     builds anyway, and their apache-maven module leaves a -bin.zip behind. This
+#     only materialises it.
+#
+#     Change detection is by SOURCE COMMIT, not by timestamp: the recorded commit
+#     is written next to the unpacked distribution and compared on the next run.
+#     A rebuild that produced identical output therefore costs nothing, and a
+#     touched archive does not trigger needless work.
+#
+#     The unpacked distribution lives in a stable location under
+#     MAVEN_TOOLS_CACHE/dists/ rather than in the project's target/, because a
+#     "clean" would otherwise pull the directory out from under the SDKman
+#     symlink and leave the matrix pointing at nothing. Unpacking goes to
+#     "<dist>.new" and is swapped into place, so an interrupted run cannot leave
+#     a half-extracted distribution behind.
+#
+# OPTIONS
+#     --force     re-unpack even when the source commit is unchanged
+#
+# ENVIRONMENT
+#     MAVEN_PROJECTS_DIR  source tree holding the components (default: maven)
+#     MAVEN_TOOLS_CACHE   where dists/ is kept (default: the repo root)
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+
+force=false
+wanted=""
+for a in "$@"; do
+  case "${a}" in
+    --force) force=true ;;
+    -h|--help) sed -n '6,45p' "${0}"; exit 0 ;;
+    *) wanted="${wanted} ${a}" ;;
+  esac
+done
+
+descriptor="${root}/maven-dists.txt"
+[[ -r "${descriptor}" ]] || { echo "no ${descriptor}" >&2; exit 1; }
+
+projects_dir="${root}/${MAVEN_PROJECTS_DIR:-maven}"
+dists_dir="${MAVEN_TOOLS_CACHE:-${root}}/dists"
+sdk_dir="${HOME}/.sdkman/candidates/maven"
+mkdir -p "${dists_dir}"
+
+stamp() { date '+%F %T'; }
+rc=0
+
+while read -r version project rest; do
+  [[ -z "${version}" || "${version}" == \#* ]] && continue
+  if [[ -n "${wanted// /}" ]]; then
+    case " ${wanted} " in *" ${version} "*) ;; *) continue ;; esac
+  fi
+
+  src="${projects_dir}/${project}"
+  if [[ ! -d "${src}" ]]; then
+    echo "[$(stamp)] ${version}: source ${project} missing -- skipped" >&2
+    rc=1; continue
+  fi
+
+  commit=$(git -C "${src}" rev-parse HEAD 2>/dev/null || echo "")
+  dist="${dists_dir}/${version}"
+  recorded=""
+  [[ -r "${dist}/.source-commit" ]] && recorded=$(cat "${dist}/.source-commit")
+
+  if [[ "${force}" != "true" && -n "${commit}" && "${commit}" == "${recorded}" && -x "${dist}/bin/mvn" ]]; then
+    echo "[$(stamp)] ${version}: unchanged (${commit:0:8}) -- nothing to do"
+    continue
+  fi
+
+  archive=$(ls -1t "${src}"/apache-maven/target/apache-maven-*-bin.zip 2>/dev/null | head -1 || true)
+  if [[ -z "${archive}" ]]; then
+    echo "[$(stamp)] ${version}: no -bin.zip under ${project}/apache-maven/target -- build it first" >&2
+    rc=1; continue
+  fi
+
+  echo "[$(stamp)] ${version}: unpacking $(basename "${archive}") (${commit:0:8})"
+  rm -rf "${dist}.new"
+  mkdir -p "${dist}.new"
+  unzip -q "${archive}" -d "${dist}.new"
+  # The archive carries one top-level directory; lift its contents up so that
+  # <dist>/bin/mvn is where SDKman expects it.
+  inner=$(ls -1d "${dist}.new"/*/ 2>/dev/null | head -1)
+  if [[ -n "${inner}" && -x "${inner}/bin/mvn" ]]; then
+    mv "${inner}" "${dist}.unpacked"
+    rm -rf "${dist}.new"
+    mv "${dist}.unpacked" "${dist}.new"
+  fi
+  [[ -x "${dist}.new/bin/mvn" ]] || { echo "[$(stamp)] ${version}: no bin/mvn in archive" >&2; rm -rf "${dist}.new"; rc=1; continue; }
+
+  [[ -n "${commit}" ]] && echo "${commit}" > "${dist}.new/.source-commit"
+  rm -rf "${dist}.prev"
+  [[ -d "${dist}" ]] && mv "${dist}" "${dist}.prev"
+  mv "${dist}.new" "${dist}"
+  rm -rf "${dist}.prev"
+
+  # Link into SDKman. A real directory there is somebody else's install -- leave
+  # it alone rather than replacing what a "sdk install" put in place.
+  mkdir -p "${sdk_dir}"
+  target="${sdk_dir}/${version}"
+  if [[ -d "${target}" && ! -L "${target}" ]]; then
+    echo "[$(stamp)] ${version}: ${target} is a real directory -- not replacing it" >&2
+  else
+    ln -sfn "${dist}" "${target}"
+  fi
+
+  if out=$("${target}/bin/mvn" -v 2>&1 | head -1); then
+    echo "[$(stamp)] ${version}: ${out}"
+  else
+    echo "[$(stamp)] ${version}: installed but 'mvn -v' failed" >&2
+    rc=1
+  fi
+done < "${descriptor}"
+
+exit "${rc}"

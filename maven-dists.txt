@@ -1,0 +1,19 @@
+# Maven distributions to materialise for the compatibility matrix.
+#
+#   <sdkman-version>   <project path under MAVEN_PROJECTS_DIR>
+#
+# The distribution archive is a by-product of the normal nightly build -- the
+# listed projects are part of the 125 the pipeline builds anyway -- so nothing
+# here triggers a build of its own. install-maven-dist only unpacks and links,
+# and only when the source commit actually moved.
+#
+# The candidate is named after the BRANCH, not after the version the build
+# reports (4.0.0-SNAPSHOT). That is deliberate: the dpv-* spike variants also
+# carry 4.0.0-SNAPSHOT, and variant-setup binds a variant by version string
+# alone -- a shared name would silently re-point the spike's symlink at this
+# plain build and the matrix would compare the bumped defaults against
+# themselves.
+#
+# Start small: 4.0.x is the next RC candidate. The other SNAPSHOT lines
+# (3.9.x, 3.10.x, master) can be added once this one earns its keep.
+4.0.x-SNAPSHOT   core/maven-4.0.x
