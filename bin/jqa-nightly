@@ -449,6 +449,12 @@ else
   build_projects="${changed}"
   [[ "${force}" == "true" ]] && build_projects=""
   run_stage build "${build_projects}" || finish FAILED build "${logdir}"
+  # The build leaves an apache-maven -bin.zip behind for the Maven source
+  # projects; materialise it so the compatibility matrix binds a current
+  # distribution. Unpacks only when the source commit moved, and never
+  # fails the run -- a missing archive is the matrix's problem, not the
+  # graph's.
+  ./bin/install-maven-dist || true
 fi
 run_stage scan "${scan_projects}" || finish FAILED scan "${logdir}"
 
