@@ -37,7 +37,10 @@ sdkman_maven_home() {
 
 # Which variants to set up: CLI args, else everything in variants.txt.
 # (Portable array fill -- macOS /bin/bash is 3.2 and has no mapfile.)
-variants=("${@}")
+# "${@}" counts as unbound under set -u when there are no arguments, and
+# /bin/bash on macOS is 3.2 -- so the plain form aborted the script before
+# it did anything at all. ${@+...} is the portable guard.
+variants=(${@+"${@}"})
 if [[ ${#variants[@]} -eq 0 ]]; then
   while IFS= read -r _name; do
     [[ -n "${_name}" ]] && variants+=("${_name}")
