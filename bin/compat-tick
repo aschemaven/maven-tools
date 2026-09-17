@@ -49,7 +49,11 @@ source "${dir}/common-functions.sh"
 export PARALLEL_JOBS MATRIX_GOALS
 
 maven_dir="${root}/${MAVEN_PROJECTS_DIR}"
-state_dir="${root}/reports"
+# var/, not reports/: reports/ holds regenerable snapshots and is meant to be
+# deletable at any time, but losing this baseline makes every component and
+# every variant look changed -- a cold start is 125 x 8 cells of
+# "clean verify" with ITs.
+state_dir="${root}/var"
 mkdir -p "${state_dir}"
 heads_state="${state_dir}/tick-heads.tsv"
 vars_state="${state_dir}/tick-variants.tsv"
