@@ -814,3 +814,330 @@ ended_at	task	project	seconds	status	load1	variant
 2026-09-17 13:40:29	scan	studies/maven-basedir-filesystem	146	ok	13.22	
 2026-09-17 13:46:15	scan	studies/maven-ci-extension	346	ok	8.15	
 2026-09-17 13:48:46	scan	studies/maven-default-plugins	151	ok	7.18	
+2026-09-17 22:23:39	clean-install--DskipTests	core/maven-4.0.x	83	ok	22,17	
+2026-09-17 23:07:11	-Prun-its-clean-verify	core/3.x/its-3	2576	failed	10,39	m4-40x
+2026-09-17 23:07:19	-Prun-its-clean-verify	core/3.x/maven-3	7	failed	9,48	m4-40x
+2026-09-17 23:07:25	-Prun-its-clean-verify	core/3.x/mvnd-1	3	failed	11,36	m4-40x
+2026-09-17 23:08:33	-Prun-its-clean-verify	core/build-cache	67	failed	16,33	m4-40x
+2026-09-17 23:15:49	-Prun-its-clean-verify	core/maven	434	failed	84,88	m4-40x
+2026-09-17 23:28:50	-Prun-its-clean-verify	core/maven-4.0.x	778	failed	7,91	m4-40x
+2026-09-17 23:28:57	-Prun-its-clean-verify	core/mvnd	4	failed	7,29	m4-40x
+2026-09-17 23:33:05	-Prun-its-clean-verify	core/resolver	247	ok	12,90	m4-40x
+2026-09-17 23:36:31	-Prun-its-clean-verify	core/resolver-ant-tasks	205	ok	10,62	m4-40x
+2026-09-17 23:37:27	-Prun-its-clean-verify	core/wrapper	56	ok	13,69	m4-40x
+2026-09-17 23:37:31	-Prun-its-clean-verify	doxia/doxia	3	failed	13,69	m4-40x
+2026-09-17 23:37:52	-Prun-its-clean-verify	doxia/sitetools	21	ok	13,59	m4-40x
+2026-09-17 23:37:56	-Prun-its-clean-verify	doxia/tools/converter	3	failed	13,59	m4-40x
+2026-09-17 23:38:01	-Prun-its-clean-verify	misc/archetypes	4	failed	13,22	m4-40x
+2026-09-17 23:38:05	-Prun-its-clean-verify	misc/dist-tool	4	failed	12,56	m4-40x
+2026-09-17 23:40:25	-Prun-its-clean-verify	misc/executor	140	ok	18,18	m4-40x
+2026-09-17 23:40:31	-Prun-its-clean-verify	misc/gh-actions-shared/v5	6	ok	18,09	m4-40x
+2026-09-17 23:40:45	-Prun-its-clean-verify	misc/indexer	12	failed	18,33	m4-40x
+2026-09-17 23:40:48	-Prun-its-clean-verify	misc/pom/apache	3	failed	20,07	m4-40x
+2026-09-17 23:41:42	-Prun-its-clean-verify	misc/pom/apache-resources	53	failed	19,37	m4-40x
+2026-09-17 23:41:51	-Prun-its-clean-verify	misc/pom/maven	9	ok	18,05	m4-40x
+2026-09-17 23:44:49	-Prun-its-clean-verify	misc/skins/fluido	178	ok	18,67	m4-40x
+2026-09-17 23:45:04	-Prun-its-clean-verify	misc/wagon	14	failed	16,45	m4-40x
+2026-09-17 23:45:07	-Prun-its-clean-verify	plexus/build-api	3	failed	16,34	m4-40x
+2026-09-17 23:45:11	-Prun-its-clean-verify	plexus/classworlds	4	failed	16,34	m4-40x
+2026-09-17 23:45:15	-Prun-its-clean-verify	plexus/codehaus-plexus.github.io	3	failed	17,03	m4-40x
+2026-09-17 23:45:19	-Prun-its-clean-verify	plexus/components/archiver	4	failed	16,55	m4-40x
+2026-09-17 23:45:27	-Prun-its-clean-verify	plexus/components/compiler	8	failed	16,10	m4-40x
+2026-09-17 23:45:30	-Prun-its-clean-verify	plexus/components/i18n	3	failed	16,98	m4-40x
+2026-09-17 23:45:34	-Prun-its-clean-verify	plexus/components/interactivity	4	failed	16,58	m4-40x
+2026-09-17 23:45:38	-Prun-its-clean-verify	plexus/components/interpolation	4	failed	15,97	m4-40x
+2026-09-17 23:45:42	-Prun-its-clean-verify	plexus/components/io	4	failed	15,97	m4-40x
+2026-09-17 23:45:46	-Prun-its-clean-verify	plexus/components/languages	4	failed	15,41	m4-40x
+2026-09-17 23:45:49	-Prun-its-clean-verify	plexus/components/resources	3	failed	18,98	m4-40x
+2026-09-17 23:45:53	-Prun-its-clean-verify	plexus/components/sec-dispatcher	4	failed	17,78	m4-40x
+2026-09-17 23:45:57	-Prun-its-clean-verify	plexus/components/velocity	4	failed	17,78	m4-40x
+2026-09-17 23:47:08	-Prun-its-clean-verify	plexus/modello	71	ok	24,42	m4-40x
+2026-09-17 23:47:12	-Prun-its-clean-verify	plexus/pom/plexus	4	failed	22,95	m4-40x
+2026-09-17 23:47:16	-Prun-its-clean-verify	plexus/testing	4	failed	22,95	m4-40x
+2026-09-17 23:47:19	-Prun-its-clean-verify	plexus/utils	3	failed	21,83	m4-40x
+2026-09-17 23:47:23	-Prun-its-clean-verify	plexus/xml	4	failed	20,48	m4-40x
+2026-09-17 23:47:55	-Prun-its-clean-verify	plugins/core-4/maven-clean-plugin	32	ok	18,22	m4-40x
+2026-09-17 23:51:45	-Prun-its-clean-verify	plugins/core-4/maven-compiler-plugin	230	failed	12,03	m4-40x
+2026-09-17 23:53:29	-Prun-its-clean-verify	plugins/core-4/maven-deploy-plugin	104	ok	16,24	m4-40x
+2026-09-17 23:55:15	-Prun-its-clean-verify	plugins/core-4/maven-install-plugin	106	failed	18,35	m4-40x
+2026-09-17 23:56:15	-Prun-its-clean-verify	plugins/core-4/maven-resources-plugin	59	ok	19,42	m4-40x
+2026-09-17 23:56:44	-Prun-its-clean-verify	plugins/core/maven-clean-plugin	29	ok	21,40	m4-40x
+2026-09-18 00:00:55	-Prun-its-clean-verify	plugins/core/maven-compiler-plugin	251	failed	16,95	m4-40x
+2026-09-18 00:02:36	-Prun-its-clean-verify	plugins/core/maven-deploy-plugin	101	ok	14,12	m4-40x
+2026-09-18 00:04:19	-Prun-its-clean-verify	plugins/core/maven-install-plugin	103	failed	11,62	m4-40x
+2026-09-18 00:05:16	-Prun-its-clean-verify	plugins/core/maven-resources-plugin	57	ok	16,61	m4-40x
+2026-09-18 00:09:10	-Prun-its-clean-verify	plugins/core/maven-site-plugin	233	failed	33,73	m4-40x
+2026-09-18 00:10:24	-Prun-its-clean-verify	plugins/core/surefire	73	failed	21,23	m4-40x
+2026-09-18 00:12:08	-Prun-its-clean-verify	plugins/packaging-4/maven-jar-plugin	104	failed	15,02	m4-40x
+2026-09-18 00:13:10	-Prun-its-clean-verify	plugins/packaging-4/maven-source-plugin	62	failed	26,91	m4-40x
+2026-09-18 00:13:32	-Prun-its-clean-verify	plugins/packaging/maven-acr-plugin	22	failed	23,11	m4-40x
+2026-09-18 00:18:22	-Prun-its-clean-verify	plugins/packaging/maven-ear-plugin	289	failed	12,76	m4-40x
+2026-09-18 00:18:53	-Prun-its-clean-verify	plugins/packaging/maven-ejb-plugin	31	ok	21,63	m4-40x
+2026-09-18 00:20:27	-Prun-its-clean-verify	plugins/packaging/maven-jar-plugin	94	failed	15,95	m4-40x
+2026-09-18 00:22:18	-Prun-its-clean-verify	plugins/packaging/maven-jlink-plugin	111	failed	11,26	m4-40x
+2026-09-18 00:23:18	-Prun-its-clean-verify	plugins/packaging/maven-jmod-plugin	60	ok	16,14	m4-40x
+2026-09-18 00:23:38	-Prun-its-clean-verify	plugins/packaging/maven-rar-plugin	20	ok	16,96	m4-40x
+2026-09-18 00:29:23	-Prun-its-clean-verify	plugins/packaging/maven-shade-plugin	345	failed	10,48	m4-40x
+2026-09-18 00:30:22	-Prun-its-clean-verify	plugins/packaging/maven-source-plugin	58	failed	14,10	m4-40x
+2026-09-18 00:31:59	-Prun-its-clean-verify	plugins/packaging/maven-war-plugin	96	failed	11,53	m4-40x
+2026-09-18 00:32:45	-Prun-its-clean-verify	plugins/reporting/jxr	45	ok	12,96	m4-40x
+2026-09-18 00:33:37	-Prun-its-clean-verify	plugins/reporting/maven-changelog-plugin	52	ok	17,84	m4-40x
+2026-09-18 00:34:31	-Prun-its-clean-verify	plugins/reporting/maven-changes-plugin	54	ok	16,06	m4-40x
+2026-09-18 00:36:49	-Prun-its-clean-verify	plugins/reporting/maven-checkstyle-plugin	138	failed	17,80	m4-40x
+2026-09-18 00:37:14	-Prun-its-clean-verify	plugins/reporting/maven-doap-plugin	25	ok	16,82	m4-40x
+2026-09-18 00:42:48	-Prun-its-clean-verify	plugins/reporting/maven-javadoc-plugin	333	ok	14,41	m4-40x
+2026-09-18 00:43:15	-Prun-its-clean-verify	plugins/reporting/maven-jdeps-plugin	27	ok	19,57	m4-40x
+2026-09-18 00:46:15	-Prun-its-clean-verify	plugins/reporting/maven-pmd-plugin	180	ok	21,57	m4-40x
+2026-09-18 00:48:37	-Prun-its-clean-verify	plugins/reporting/maven-project-info-reports-plugin	142	failed	28,30	m4-40x
+2026-09-18 00:50:40	-Prun-its-clean-verify	plugins/tools/archetype	122	ok	23,47	m4-40x
+2026-09-18 00:55:11	-Prun-its-clean-verify	plugins/tools/enforcer	271	failed	14,53	m4-40x
+2026-09-18 00:56:20	-Prun-its-clean-verify	plugins/tools/maven-antrun-plugin	69	failed	19,85	m4-40x
+2026-09-18 00:58:25	-Prun-its-clean-verify	plugins/tools/maven-artifact-plugin	125	failed	20,09	m4-40x
+2026-09-18 01:14:48	-Prun-its-clean-verify	plugins/tools/maven-assembly-plugin	982	failed	16,85	m4-40x
+2026-09-18 01:19:47	-Prun-its-clean-verify	plugins/tools/maven-dependency-plugin	299	failed	11,96	m4-40x
+2026-09-18 01:32:03	-Prun-its-clean-verify	plugins/tools/maven-gpg-plugin	736	failed	10,67	m4-40x
+2026-09-18 01:33:05	-Prun-its-clean-verify	plugins/tools/maven-help-plugin	62	ok	15,05	m4-40x
+2026-09-18 01:37:22	-Prun-its-clean-verify	plugins/tools/maven-invoker-plugin	257	failed	11,67	m4-40x
+2026-09-18 01:37:58	-Prun-its-clean-verify	plugins/tools/maven-jarsigner-plugin	36	ok	13,26	m4-40x
+2026-09-18 01:38:23	-Prun-its-clean-verify	plugins/tools/maven-jdeprscan-plugin	24	ok	15,35	m4-40x
+2026-09-18 01:38:50	-Prun-its-clean-verify	plugins/tools/maven-remote-resources-plugin	27	failed	12,25	m4-40x
+2026-09-18 01:39:33	-Prun-its-clean-verify	plugins/tools/maven-scm-publish-plugin	43	ok	21,74	m4-40x
+2026-09-18 01:39:49	-Prun-its-clean-verify	plugins/tools/maven-scripting-plugin	16	ok	18,31	m4-40x
+2026-09-18 01:40:17	-Prun-its-clean-verify	plugins/tools/maven-toolchains-plugin	28	ok	18,14	m4-40x
+2026-09-18 01:42:48	-Prun-its-clean-verify	plugins/tools/plugin-tools	151	failed	16,19	m4-40x
+2026-09-18 01:45:56	-Prun-its-clean-verify	plugins/tools/release	188	failed	15,90	m4-40x
+2026-09-18 01:49:51	-Prun-its-clean-verify	plugins/tools/scm	235	ok	9,34	m4-40x
+2026-09-18 01:49:55	-Prun-its-clean-verify	shared-4/archiver	4	failed	9,79	m4-40x
+2026-09-18 01:49:58	-Prun-its-clean-verify	shared-4/filtering	3	failed	9,79	m4-40x
+2026-09-18 01:50:02	-Prun-its-clean-verify	shared/archiver	4	failed	12,53	m4-40x
+2026-09-18 01:50:06	-Prun-its-clean-verify	shared/common-artifact-filters	4	failed	12,57	m4-40x
+2026-09-18 01:51:24	-Prun-its-clean-verify	shared/dependency-analyzer	78	ok	12,88	m4-40x
+2026-09-18 01:52:04	-Prun-its-clean-verify	shared/dependency-tree	39	failed	19,30	m4-40x
+2026-09-18 01:52:08	-Prun-its-clean-verify	shared/file-management	4	failed	19,30	m4-40x
+2026-09-18 01:52:12	-Prun-its-clean-verify	shared/filtering	4	failed	19,44	m4-40x
+2026-09-18 01:52:15	-Prun-its-clean-verify	shared/invoker	3	failed	18,44	m4-40x
+2026-09-18 01:52:19	-Prun-its-clean-verify	shared/jarsigner	4	failed	18,44	m4-40x
+2026-09-18 01:52:22	-Prun-its-clean-verify	shared/mapping	3	failed	18,17	m4-40x
+2026-09-18 01:52:26	-Prun-its-clean-verify	shared/reporting-api	4	failed	17,43	m4-40x
+2026-09-18 01:52:30	-Prun-its-clean-verify	shared/reporting-exec	4	failed	16,68	m4-40x
+2026-09-18 01:52:34	-Prun-its-clean-verify	shared/reporting-impl	4	failed	16,68	m4-40x
+2026-09-18 01:52:37	-Prun-its-clean-verify	shared/script-interpreter	3	failed	17,74	m4-40x
+2026-09-18 01:52:41	-Prun-its-clean-verify	shared/shared-incremental	4	failed	17,44	m4-40x
+2026-09-18 01:52:49	-Prun-its-clean-verify	shared/shared-io	8	ok	20,13	m4-40x
+2026-09-18 01:52:53	-Prun-its-clean-verify	shared/shared-jar	4	failed	20,13	m4-40x
+2026-09-18 01:52:56	-Prun-its-clean-verify	shared/shared-resources	3	failed	19,40	m4-40x
+2026-09-18 01:53:00	-Prun-its-clean-verify	shared/shared-utils	4	failed	18,73	m4-40x
+2026-09-18 01:53:03	-Prun-its-clean-verify	shared/verifier	3	failed	18,73	m4-40x
+2026-09-18 01:53:07	-Prun-its-clean-verify	sisu/sisu-project	3	failed	18,67	m4-40x
+2026-09-18 01:53:11	-Prun-its-clean-verify	site	3	failed	18,54	m4-40x
+2026-09-18 01:53:15	-Prun-its-clean-verify	studies/maven-basedir-filesystem	4	failed	19,21	m4-40x
+2026-09-18 01:53:22	-Prun-its-clean-verify	studies/maven-ci-extension	7	failed	18,88	m4-40x
+2026-09-18 01:53:26	-Prun-its-clean-verify	studies/maven-default-plugins	4	failed	18,00	m4-40x
+2026-09-18 03:29:18	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/3.x/maven-3	1287	ok	10.94	
+2026-09-18 03:41:59	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/3.x/mvnd-1	761	failed	5.66	
+2026-09-18 03:44:34	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/build-cache	147	ok	7.46	
+2026-09-18 04:10:25	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/maven	1520	ok	9.89	
+2026-09-18 04:32:01	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/maven-4.0.x	1282	ok	10.25	
+2026-09-18 04:46:24	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/mvnd	861	failed	7.96	
+2026-09-18 04:48:55	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/wrapper	149	ok	6.23	
+2026-09-18 04:52:10	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	doxia/sitetools	193	ok	4.70	
+2026-09-18 04:52:43	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/pom/apache	32	ok	4.44	
+2026-09-18 04:53:39	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/pom/maven	56	ok	5.82	
+2026-09-18 04:55:50	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core-4/maven-deploy-plugin	129	ok	6.97	
+2026-09-18 04:57:55	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core-4/maven-install-plugin	123	ok	6.07	
+2026-09-18 04:59:49	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-deploy-plugin	110	ok	5.91	
+2026-09-18 05:01:57	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-install-plugin	125	ok	6.72	
+2026-09-18 05:03:43	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-site-plugin	98	ok	10.12	
+2026-09-18 05:04:33	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/packaging/maven-jlink-plugin	47	ok	9.76	
+2026-09-18 05:05:43	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/packaging/maven-shade-plugin	65	ok	12.45	
+2026-09-18 05:11:10	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/reporting/maven-javadoc-plugin	315	ok	5.00	
+2026-09-18 05:14:13	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/reporting/maven-project-info-reports-plugin	177	ok	6.67	
+2026-09-18 05:16:56	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/archetype	157	ok	12.45	
+2026-09-18 05:18:35	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/enforcer	95	ok	11.18	
+2026-09-18 05:19:44	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-artifact-plugin	64	ok	11.26	
+2026-09-18 05:22:32	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-dependency-plugin	165	ok	9.69	
+2026-09-18 05:24:05	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-help-plugin	91	ok	10.54	
+2026-09-18 05:25:21	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-invoker-plugin	73	ok	11.36	
+2026-09-18 05:26:51	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-scripting-plugin	89	ok	6.64	
+2026-09-18 05:32:05	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/release	310	ok	8.97	
+2026-09-18 05:47:19	scan	core/3.x/its-3	887	ok	9.94	
+2026-09-18 06:02:41	scan	core/3.x/maven-3	922	ok	8.30	
+2026-09-18 06:06:18	scan	core/3.x/mvnd-1	217	ok	9.79	
+2026-09-18 06:09:37	scan	core/build-cache	197	ok	7.74	
+2026-09-18 06:29:43	scan	core/maven	1206	ok	8.55	
+2026-09-18 06:41:03	scan	core/maven-4.0.x	680	ok	9.18	
+2026-09-18 06:44:08	scan	core/mvnd	184	ok	13.62	
+2026-09-18 06:53:15	scan	core/resolver	546	ok	4.27	
+2026-09-18 06:56:23	scan	core/resolver-ant-tasks	187	ok	6.60	
+2026-09-18 07:00:30	scan	core/wrapper	247	ok	6.42	
+2026-09-18 07:06:09	scan	doxia/doxia	335	ok	6.92	
+2026-09-18 07:16:54	scan	doxia/sitetools	644	ok	12.65	
+2026-09-18 07:21:25	scan	doxia/tools/converter	270	ok	13.66	
+2026-09-18 07:25:28	scan	misc/archetypes	242	ok	16.75	
+2026-09-18 07:36:51	scan	misc/dist-tool	681	ok	12.34	
+2026-09-18 07:45:13	scan	misc/executor	502	ok	9.69	
+2026-09-18 07:47:25	scan	misc/gh-actions-shared/v5	129	ok	5.43	
+2026-09-18 10:50:51	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/3.x/its-3	39	ok	17,03	
+2026-09-18 10:51:43	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/3.x/maven-3	51	ok	29,97	
+2026-09-18 10:54:59	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/3.x/mvnd-1	193	failed	47,32	
+2026-09-18 10:55:10	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/build-cache	11	ok	41,58	
+2026-09-18 10:59:00	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/maven	228	ok	21,56	
+2026-09-18 11:01:30	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/maven-4.0.x	148	ok	16,56	
+2026-09-18 11:06:35	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/mvnd	302	failed	45,57	
+2026-09-18 11:07:28	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/resolver-ant-tasks	53	ok	35,01	
+2026-09-18 11:07:38	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	core/wrapper	10	ok	34,29	
+2026-09-18 11:07:52	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	doxia/sitetools	13	ok	37,84	
+2026-09-18 11:08:56	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/executor	62	ok	34,25	
+2026-09-18 11:10:19	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/indexer	83	ok	36,67	
+2026-09-18 11:10:22	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/pom/apache	3	ok	35,89	
+2026-09-18 11:10:29	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/pom/apache-resources	7	ok	36,30	
+2026-09-18 11:10:35	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	misc/pom/maven	6	ok	34,28	
+2026-09-18 11:10:45	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core-4/maven-deploy-plugin	10	ok	32,96	
+2026-09-18 11:10:55	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core-4/maven-install-plugin	10	ok	32,57	
+2026-09-18 11:11:02	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-deploy-plugin	7	ok	33,25	
+2026-09-18 11:11:10	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-install-plugin	8	ok	32,59	
+2026-09-18 11:11:19	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/core/maven-site-plugin	9	ok	31,17	
+2026-09-18 11:11:26	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/packaging/maven-jlink-plugin	7	ok	29,80	
+2026-09-18 11:11:32	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/packaging/maven-jmod-plugin	6	ok	34,30	
+2026-09-18 11:11:41	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/packaging/maven-shade-plugin	9	ok	30,97	
+2026-09-18 11:11:51	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/reporting/maven-changes-plugin	10	ok	29,53	
+2026-09-18 11:12:31	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/reporting/maven-javadoc-plugin	40	ok	27,55	
+2026-09-18 11:12:48	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/reporting/maven-project-info-reports-plugin	17	ok	28,02	
+2026-09-18 11:13:04	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/archetype	15	ok	23,63	
+2026-09-18 11:13:31	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/enforcer	26	ok	35,74	
+2026-09-18 11:13:44	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-artifact-plugin	12	ok	31,62	
+2026-09-18 11:14:04	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-assembly-plugin	14	ok	28,39	
+2026-09-18 11:14:51	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-dependency-plugin	46	ok	20,49	
+2026-09-18 11:15:08	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-gpg-plugin	17	ok	22,23	
+2026-09-18 11:15:19	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-help-plugin	11	ok	21,46	
+2026-09-18 11:15:33	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-invoker-plugin	13	ok	25,13	
+2026-09-18 11:15:49	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-jarsigner-plugin	15	ok	30,67	
+2026-09-18 11:16:02	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-jdeprscan-plugin	12	ok	31,85	
+2026-09-18 11:16:17	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-remote-resources-plugin	14	ok	32,31	
+2026-09-18 11:16:25	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/maven-scripting-plugin	8	ok	30,45	
+2026-09-18 11:17:04	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	plugins/tools/release	39	ok	31,02	
+2026-09-18 11:17:10	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/dependency-tree	6	ok	29,18	
+2026-09-18 11:17:16	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/file-management	6	ok	27,08	
+2026-09-18 11:17:49	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/invoker	33	ok	19,72	
+2026-09-18 11:17:55	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/jarsigner	6	ok	18,94	
+2026-09-18 11:18:22	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/reporting-impl	27	ok	25,29	
+2026-09-18 11:18:27	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/shared-incremental	5	ok	25,29	
+2026-09-18 11:18:38	clean-install--fae--Dsurefire.rerunFailingTestsCount=2	shared/verifier	11	ok	21,36	
+2026-09-18 11:22:14	scan	core/3.x/its-3	209	ok	16,69	
+2026-09-18 11:23:46	scan	core/3.x/maven-3	92	ok	9,22	
+2026-09-18 11:24:17	scan	core/3.x/mvnd-1	30	ok	11,75	
+2026-09-18 11:24:42	scan	core/build-cache	25	ok	19,04	
+2026-09-18 11:27:07	scan	core/maven	145	ok	9,34	
+2026-09-18 11:29:15	scan	core/maven-4.0.x	128	ok	8,78	
+2026-09-18 11:29:50	scan	core/mvnd	35	ok	8,42	
+2026-09-18 11:32:06	scan	core/resolver	135	ok	17,18	
+2026-09-18 11:32:30	scan	core/resolver-ant-tasks	24	ok	14,36	
+2026-09-18 11:33:12	scan	core/wrapper	42	ok	13,88	
+2026-09-18 11:34:03	scan	doxia/doxia	51	ok	18,63	
+2026-09-18 11:35:18	scan	doxia/sitetools	75	ok	11,24	
+2026-09-18 11:35:33	scan	doxia/tools/converter	15	ok	10,38	
+2026-09-18 11:36:01	scan	misc/archetypes	28	ok	17,23	
+2026-09-18 11:36:56	scan	misc/dist-tool	55	ok	13,23	
+2026-09-18 11:38:25	scan	misc/executor	88	ok	13,88	
+2026-09-18 11:38:41	scan	misc/gh-actions-shared/v5	16	ok	12,89	
+2026-09-18 11:39:53	scan	misc/indexer	71	ok	12,61	
+2026-09-18 11:40:07	scan	misc/pom/apache	14	ok	12,22	
+2026-09-18 11:40:32	scan	misc/pom/apache-resources	25	ok	11,45	
+2026-09-18 11:40:59	scan	misc/pom/maven	27	ok	12,57	
+2026-09-18 11:41:11	scan	misc/skins/fluido	12	ok	12,41	
+2026-09-18 11:42:27	scan	misc/wagon	76	ok	13,80	
+2026-09-18 11:42:45	scan	plexus/build-api	18	ok	13,92	
+2026-09-18 11:42:59	scan	plexus/classworlds	14	ok	14,13	
+2026-09-18 11:43:11	scan	plexus/codehaus-plexus.github.io	12	ok	13,08	
+2026-09-18 11:43:29	scan	plexus/components/archiver	18	ok	11,71	
+2026-09-18 11:45:17	scan	plexus/components/compiler	108	ok	12,34	
+2026-09-18 11:45:29	scan	plexus/components/i18n	12	ok	13,22	
+2026-09-18 11:45:43	scan	plexus/components/interactivity	14	ok	13,28	
+2026-09-18 11:45:57	scan	plexus/components/interpolation	14	ok	14,33	
+2026-09-18 11:46:09	scan	plexus/components/io	12	ok	13,80	
+2026-09-18 11:46:27	scan	plexus/components/languages	18	ok	13,68	
+2026-09-18 11:46:40	scan	plexus/components/resources	13	ok	13,32	
+2026-09-18 11:46:52	scan	plexus/components/sec-dispatcher	12	ok	13,65	
+2026-09-18 11:47:04	scan	plexus/components/velocity	11	ok	13,10	
+2026-09-18 11:48:16	scan	plexus/modello	72	ok	29,37	
+2026-09-18 11:48:30	scan	plexus/pom/plexus	14	ok	25,43	
+2026-09-18 11:48:42	scan	plexus/testing	12	ok	23,88	
+2026-09-18 11:48:56	scan	plexus/utils	14	ok	21,20	
+2026-09-18 11:49:16	scan	plexus/xml	20	ok	18,56	
+2026-09-18 11:50:05	scan	plugins/core-4/maven-clean-plugin	49	ok	17,08	
+2026-09-18 11:50:23	scan	plugins/core-4/maven-compiler-plugin	18	ok	15,10	
+2026-09-18 11:50:40	scan	plugins/core-4/maven-deploy-plugin	17	ok	14,24	
+2026-09-18 11:50:56	scan	plugins/core-4/maven-install-plugin	16	ok	18,14	
+2026-09-18 11:51:32	scan	plugins/core-4/maven-resources-plugin	35	ok	15,70	
+2026-09-18 11:51:53	scan	plugins/core/maven-clean-plugin	21	ok	15,81	
+2026-09-18 11:52:07	scan	plugins/core/maven-compiler-plugin	14	ok	14,40	
+2026-09-18 11:52:21	scan	plugins/core/maven-deploy-plugin	14	ok	14,16	
+2026-09-18 11:52:34	scan	plugins/core/maven-install-plugin	13	ok	13,60	
+2026-09-18 11:52:47	scan	plugins/core/maven-resources-plugin	13	ok	13,76	
+2026-09-18 11:53:06	scan	plugins/core/maven-site-plugin	19	ok	13,87	
+2026-09-18 11:53:59	scan	plugins/core/surefire	53	ok	11,00	
+2026-09-18 11:54:23	scan	plugins/packaging-4/maven-jar-plugin	24	ok	11,47	
+2026-09-18 11:54:37	scan	plugins/packaging-4/maven-source-plugin	14	ok	13,65	
+2026-09-18 11:54:57	scan	plugins/packaging/maven-acr-plugin	20	ok	12,02	
+2026-09-18 11:57:20	scan	plugins/packaging/maven-ear-plugin	143	ok	36,23	
+2026-09-18 11:57:33	scan	plugins/packaging/maven-ejb-plugin	13	ok	30,41	
+2026-09-18 11:57:46	scan	plugins/packaging/maven-jar-plugin	13	ok	28,11	
+2026-09-18 11:57:59	scan	plugins/packaging/maven-jlink-plugin	13	ok	24,96	
+2026-09-18 11:58:12	scan	plugins/packaging/maven-jmod-plugin	13	ok	22,58	
+2026-09-18 11:58:38	scan	plugins/packaging/maven-rar-plugin	26	ok	21,84	
+2026-09-18 11:58:56	scan	plugins/packaging/maven-shade-plugin	18	ok	20,85	
+2026-09-18 11:59:11	scan	plugins/packaging/maven-source-plugin	15	ok	18,69	
+2026-09-18 11:59:27	scan	plugins/packaging/maven-war-plugin	16	ok	16,81	
+2026-09-18 11:59:47	scan	plugins/reporting/jxr	20	ok	14,63	
+2026-09-18 12:00:00	scan	plugins/reporting/maven-changelog-plugin	13	ok	13,32	
+2026-09-18 12:00:19	scan	plugins/reporting/maven-changes-plugin	19	ok	17,22	
+2026-09-18 12:00:58	scan	plugins/reporting/maven-checkstyle-plugin	39	ok	12,97	
+2026-09-18 12:01:17	scan	plugins/reporting/maven-doap-plugin	19	ok	12,22	
+2026-09-18 12:01:36	scan	plugins/reporting/maven-javadoc-plugin	19	ok	11,73	
+2026-09-18 12:01:50	scan	plugins/reporting/maven-jdeps-plugin	14	ok	19,33	
+2026-09-18 12:02:43	scan	plugins/reporting/maven-pmd-plugin	53	ok	18,63	
+2026-09-18 12:03:14	scan	plugins/reporting/maven-project-info-reports-plugin	31	ok	13,66	
+2026-09-18 12:04:16	scan	plugins/tools/archetype	62	ok	18,01	
+2026-09-18 12:04:38	scan	plugins/tools/enforcer	22	ok	17,91	
+2026-09-18 12:04:50	scan	plugins/tools/maven-antrun-plugin	12	ok	17,33	
+2026-09-18 12:05:03	scan	plugins/tools/maven-artifact-plugin	13	ok	14,66	
+2026-09-18 12:05:20	scan	plugins/tools/maven-assembly-plugin	17	ok	13,53	
+2026-09-18 12:05:41	scan	plugins/tools/maven-dependency-plugin	21	ok	12,19	
+2026-09-18 12:05:59	scan	plugins/tools/maven-gpg-plugin	18	ok	10,87	
+2026-09-18 12:06:18	scan	plugins/tools/maven-help-plugin	19	ok	10,81	
+2026-09-18 12:06:31	scan	plugins/tools/maven-invoker-plugin	13	ok	10,24	
+2026-09-18 12:06:44	scan	plugins/tools/maven-jarsigner-plugin	13	ok	14,10	
+2026-09-18 12:07:00	scan	plugins/tools/maven-jdeprscan-plugin	16	ok	16,03	
+2026-09-18 12:07:14	scan	plugins/tools/maven-remote-resources-plugin	14	ok	14,08	
+2026-09-18 12:07:29	scan	plugins/tools/maven-scm-publish-plugin	15	ok	12,99	
+2026-09-18 12:07:41	scan	plugins/tools/maven-scripting-plugin	12	ok	12,21	
+2026-09-18 12:07:56	scan	plugins/tools/maven-toolchains-plugin	15	ok	13,30	
+2026-09-18 12:08:38	scan	plugins/tools/plugin-tools	42	ok	11,64	
+2026-09-18 12:09:04	scan	plugins/tools/release	26	ok	10,45	
+2026-09-18 12:10:38	scan	plugins/tools/scm	94	ok	14,55	
+2026-09-18 12:10:56	scan	shared-4/archiver	17	ok	12,97	
+2026-09-18 12:11:14	scan	shared-4/filtering	18	ok	11,06	
+2026-09-18 12:11:25	scan	shared/archiver	11	ok	10,82	
+2026-09-18 12:11:36	scan	shared/common-artifact-filters	10	ok	10,07	
+2026-09-18 12:11:49	scan	shared/dependency-analyzer	13	ok	9,48	
+2026-09-18 12:12:00	scan	shared/dependency-tree	11	ok	9,03	
+2026-09-18 12:12:12	scan	shared/file-management	12	ok	9,19	
+2026-09-18 12:12:23	scan	shared/filtering	11	ok	9,01	
+2026-09-18 12:13:28	scan	shared/invoker	65	ok	13,20	
+2026-09-18 12:13:40	scan	shared/jarsigner	12	ok	14,25	
+2026-09-18 12:13:51	scan	shared/mapping	11	ok	23,51	
+2026-09-18 12:14:03	scan	shared/reporting-api	12	ok	20,60	
+2026-09-18 12:14:15	scan	shared/reporting-exec	12	ok	19,23	
+2026-09-18 12:14:27	scan	shared/reporting-impl	12	ok	18,35	
+2026-09-18 12:14:39	scan	shared/script-interpreter	12	ok	16,26	
+2026-09-18 12:14:52	scan	shared/shared-incremental	13	ok	15,80	
+2026-09-18 12:15:05	scan	shared/shared-io	13	ok	17,68	
+2026-09-18 12:15:17	scan	shared/shared-jar	12	ok	18,99	
+2026-09-18 12:15:28	scan	shared/shared-resources	11	ok	17,59	
+2026-09-18 12:15:39	scan	shared/shared-utils	11	ok	16,72	
+2026-09-18 12:15:52	scan	shared/verifier	13	ok	17,21	
+2026-09-18 12:16:38	scan	sisu/sisu-project	46	ok	19,22	
+2026-09-18 12:16:52	scan	site	14	ok	17,73	
+2026-09-18 12:17:08	scan	studies/maven-basedir-filesystem	16	ok	15,83	
+2026-09-18 12:17:35	scan	studies/maven-ci-extension	27	ok	17,80	
+2026-09-18 12:17:51	scan	studies/maven-default-plugins	16	ok	16,26	
