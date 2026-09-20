@@ -134,7 +134,29 @@ build_component_row() {
 
 echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over components)"
 
-if [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
+# Parallelism has to respect the partial order: each component installs for
+# the next, so a consumer must not start while its supplier is still building.
+#
+# Measured over the survey, that order is remarkably thin -- every
+# inter-component SNAPSHOT dependency sits among the first few entries of the
+# manifest (core/3.x/its-3, core/maven, core/maven-4.0.x). Everything after
+# them is independent.
+#
+# So instead of a topological scheduler -- more code, and more room for the
+# kind of mistake that costs a day -- the first MATRIX_SERIAL_PREFIX
+# components run in order, and the remainder runs in parallel. Verify the
+# assumption with bin/check-build-order before raising PARALLEL_JOBS.
+: "${MATRIX_SERIAL_PREFIX:=6}"
+
+if [[ "${PARALLEL_JOBS}" -gt 1 && "${#matrix_projects[@]}" -gt "${MATRIX_SERIAL_PREFIX}" ]]; then
+  serial=("${matrix_projects[@]:0:${MATRIX_SERIAL_PREFIX}}")
+  rest=("${matrix_projects[@]:${MATRIX_SERIAL_PREFIX}}")
+  echo "Order barrier: ${#serial[@]} component(s) sequentially, then ${#rest[@]} with ${PARALLEL_JOBS} jobs"
+  for project in ${serial[@]+"${serial[@]}"}; do
+    build_component_row "${project}"
+  done
+  run_parallel "${PARALLEL_JOBS}" build_component_row ${rest[@]+"${rest[@]}"}
+elif [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
   run_parallel "${PARALLEL_JOBS}" build_component_row "${matrix_projects[@]}"
 else
   for project in "${matrix_projects[@]}"; do

@@ -560,7 +560,8 @@ exec_mvn() {
   # with "Could not find artifact ...-SNAPSHOT". Fourteen of the twenty-one
   # failures in the first full matrix run had that single cause.
   if [[ -n "${variant}" ]]; then
-    opts="${opts} -Daether.enhancedLocalRepository.localPrefix=installed/${variant}"
+    : # prefix lives in MAVEN_OPTS (see below), not on the command line:
+    : # forked Maven processes inherit the environment, not our argv.
   fi
 
   # When 'clean' is part of the requested goals, recursively wipe
@@ -757,6 +758,11 @@ exec_mvn() {
       cd "${project_dir}"
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
+      # Variant install prefix in the ENVIRONMENT, so that forked Maven
+      # processes (invoker ITs, mvnd) resolve from where the outer build
+      # installs. On the command line it reached the outer build only, and
+      # a plugin could not find the artefact it had just installed.
+      [[ -n "${variant}" ]] && export MAVEN_OPTS="${MAVEN_OPTS:-} -Daether.enhancedLocalRepository.localPrefix=installed/${variant}"
       # shellcheck disable=SC2086
       ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
     ) > "${current_logs}"
