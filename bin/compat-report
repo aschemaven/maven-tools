@@ -70,12 +70,31 @@ first_error() {
   local d="${logs}/${1}" f
   f=$(ls -t "${d}"/*.log 2>/dev/null | head -1) || return 0
   [[ -n "${f}" ]] || return 0
-  # Skip the separator lines Maven prints around its error block, and the
-  # "re-run with -e/-X" boilerplate, or the summary reads "-----------".
-  grep -oE '\[ERROR\] .{0,100}' "${f}" 2>/dev/null \
-    | sed 's/\[ERROR\] //' | tr -d '\r' \
-    | grep -vE '^-+$|^$|^To see the full stack|^Re-run Maven|^For more information|^\[Help' \
-    | head -1 | cut -c1-400
+  # The first [ERROR] line of a surefire failure is the "Tests run: ..."
+  # summary, which says nothing. What matters sits a few lines below: the
+  # failing test method, the exception and its "Caused by". So anchor on the
+  # first real marker and take the informative lines that follow, dropping
+  # stack frames.
+  #
+  # This is what turns "in org.mvnda..." into
+  # "NoSuchMethodException: org.apache.maven.cling.MavenCling.doMain" -- the
+  # difference between a line of noise and a finding.
+  awk '
+    /<<< (FAILURE|ERROR)!|Failed to execute goal/ { hit = 1 }
+    /^\[INFO\]/ { next }            # separators and timings say nothing
+    hit {
+      line = $0
+      sub(/^\[ERROR\] /, "", line)
+      sub(/\r$/, "", line)
+      if (line ~ /^[[:space:]]*at /) next
+      if (line ~ /^[[:space:]]*\.\.\. [0-9]+ more/) next
+      if (line ~ /^-+$/ || line ~ /^[[:space:]]*$/) next
+      if (line ~ /^(To see the full stack|Re-run Maven|For more information|\[Help)/) next
+      if (line ~ /^Tests run:.*<<</) { sub(/.*<<< /, "", line); line = "test " line }
+      print substr(line, 1, 160)
+      if (++n >= 5) exit
+    }
+  ' "${f}" 2>/dev/null
 }
 
 ok=0; warn=0; real=(); harness=()
@@ -129,7 +148,9 @@ render() {
     echo; echo "Failures worth looking at:"
     local p
     for p in "${real[@]}"; do
-      printf '  %-44s %s\n' "${p}" "$(first_error "${p}")"
+      echo
+      echo "  ${p}"
+      first_error "${p}" | sed 's/^/      /'
     done
   fi
 
@@ -154,7 +175,7 @@ render_html() {
   echo "<table cellpadding=4 style=\"border-collapse:collapse\">"
   printf '<tr><td>components</td><td align=right><b>%d</b></td></tr>' "${total}"
   printf '<tr><td>ok</td><td align=right><b>%d</b></td></tr>' "${ok}"
-  printf '<tr><td>failed (real)</td><td align=right><b>%d</b></td><td>%s</td></tr>' \
+  printf '<tr><td>failed (real)</td><td align=right><b>%d</b></td><td><pre style=\"margin:0;white-space:pre-wrap;font-size:12px\">%s</pre></td></tr>' \
     "${n_real}" "$([[ -n "${delta}" ]] && { [[ ${delta} -gt 0 ]] && echo "+${delta} vs previous" || { [[ ${delta} -lt 0 ]] && echo "${delta} vs previous" || echo "unchanged"; }; })"
   printf '<tr><td>failed (our isolation)</td><td align=right>%d</td></tr>' "${n_harness}"
   printf '<tr><td>not a Maven project</td><td align=right>%d</td></tr>' "${warn}"
