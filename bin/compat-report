@@ -1,0 +1,217 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compat-report - summarise a compatibility matrix run and mail the result.
+#
+# SYNOPSIS
+#     compat-report [--variant <name>] [--mail <address>] [--no-baseline]
+#
+# DESCRIPTION
+#     Reads variants/<variant>/cells/**/*.json plus the matching build logs and
+#     prints a short report: totals, then the failures SPLIT BY CAUSE, then the
+#     change against the previous run.
+#
+#     The split is the point. A run of this matrix produced 21 failures, of
+#     which 30 log directories showed nothing but unresolved sibling SNAPSHOTs
+#     -- an artefact of building each component into its own repository, not a
+#     Maven incompatibility. A report that lists those next to real failures is
+#     ignored within a week, so they are counted separately and named last.
+#
+#     The delta matters more than the total: "21 failures" says nothing,
+#     "two more than yesterday, namely these" is actionable. The previous
+#     totals are kept in var/compat-baseline-<variant>.tsv.
+#
+#     Sent daily rather than only on failure, deliberately: a mail that arrives
+#     only when something breaks cannot be told apart from an automation that
+#     has silently died.
+#
+#     The cell JSON carries a "time" field that may hold an entire stack trace.
+#     It is never printed; one-line summaries are extracted from the logs.
+#
+# OPTIONS
+#     --variant <name>   which variant to report on (default: m4-40x)
+#     --mail <address>   send the report to this address as well as printing it
+#     --no-baseline      do not compare against, or update, the baseline
+#
+# EXIT STATUS
+#     0 always, unless the cells cannot be read. A failing matrix is news to
+#     report, not a reason for the reporter itself to fail.
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+
+variant="m4-40x"
+mailto=""
+use_baseline=true
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
+    --variant) variant="${2}"; shift 2 ;;
+    --mail)    mailto="${2}";  shift 2 ;;
+    --no-baseline) use_baseline=false; shift ;;
+    -h|--help) sed -n '6,40p' "${0}"; exit 0 ;;
+    *) echo "unknown option: ${1}" >&2; exit 2 ;;
+  esac
+done
+
+cells="${root}/variants/${variant}/cells"
+logs="${root}/variants/${variant}/logs"
+[[ -d "${cells}" ]] || { echo "no cells for variant '${variant}' under ${cells}" >&2; exit 1; }
+
+# A failure whose log shows only unresolved artefacts is ours, not Maven's.
+is_resolution_failure() {
+  local d="${logs}/${1}" f
+  f=$(ls -t "${d}"/*.log 2>/dev/null | head -1) || return 1
+  [[ -n "${f}" ]] || return 1
+  grep -qE 'could not be resolved|Could not find artifact|was not found in' "${f}" 2>/dev/null
+}
+
+first_error() {
+  local d="${logs}/${1}" f
+  f=$(ls -t "${d}"/*.log 2>/dev/null | head -1) || return 0
+  [[ -n "${f}" ]] || return 0
+  # Skip the separator lines Maven prints around its error block, and the
+  # "re-run with -e/-X" boilerplate, or the summary reads "-----------".
+  grep -oE '\[ERROR\] .{0,100}' "${f}" 2>/dev/null \
+    | sed 's/\[ERROR\] //' | tr -d '\r' \
+    | grep -vE '^-+$|^$|^To see the full stack|^Re-run Maven|^For more information|^\[Help' \
+    | head -1 | cut -c1-400
+}
+
+ok=0; warn=0; real=(); harness=()
+while IFS= read -r c; do
+  p="${c#"${cells}"/}"; p="${p%.json}"
+  st=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status','?'))" "${c}" 2>/dev/null || echo '?')
+  case "${st}" in
+    ok)   ok=$((ok + 1)) ;;
+    warn) warn=$((warn + 1)) ;;
+    fail) if is_resolution_failure "${p}"; then harness+=("${p}"); else real+=("${p}"); fi ;;
+  esac
+done < <(find "${cells}" -name '*.json' | sort)
+
+n_real=${#real[@]}; n_harness=${#harness[@]}
+total=$((ok + warn + n_real + n_harness))
+
+# --- baseline -------------------------------------------------------------
+base_file="${root}/var/compat-baseline-${variant}.tsv"
+delta=""
+if [[ "${use_baseline}" == "true" && -r "${base_file}" ]]; then
+  prev=$(cat "${base_file}")
+  prev_real=$(echo "${prev}" | awk -F'\t' 'NR==1{print $2}')
+  [[ -n "${prev_real}" ]] && delta=$((n_real - prev_real))
+  prev_list=$(echo "${prev}" | tail -n +2)
+  new_failures=$(comm -13 <(echo "${prev_list}" | sort) <(printf '%s\n' ${real[@]+"${real[@]}"} | sort) 2>/dev/null || true)
+  gone=$(comm -23 <(echo "${prev_list}" | sort) <(printf '%s\n' ${real[@]+"${real[@]}"} | sort) 2>/dev/null || true)
+fi
+
+# --- render ---------------------------------------------------------------
+render() {
+  echo "Compatibility matrix: variant ${variant} on $(hostname -s)"
+  echo "$(date '+%F %T')"
+  echo
+  printf '  %-28s %4d\n' "components" "${total}"
+  printf '  %-28s %4d\n' "ok" "${ok}"
+  printf '  %-28s %4d%s\n' "failed (real)" "${n_real}" \
+    "$([[ -n "${delta}" ]] && { [[ ${delta} -gt 0 ]] && echo "   (+${delta} vs previous run)" || { [[ ${delta} -lt 0 ]] && echo "   (${delta} vs previous run)" || echo "   (unchanged)"; }; })"
+  printf '  %-28s %4d\n' "failed (our isolation)" "${n_harness}"
+  printf '  %-28s %4d\n' "not a Maven project" "${warn}"
+
+  if [[ -n "${new_failures:-}" ]]; then
+    echo; echo "NEW failures since the previous run:"
+    echo "${new_failures}" | sed '/^$/d;s/^/  /'
+  fi
+  if [[ -n "${gone:-}" ]]; then
+    echo; echo "Fixed since the previous run:"
+    echo "${gone}" | sed '/^$/d;s/^/  /'
+  fi
+
+  if [[ ${n_real} -gt 0 ]]; then
+    echo; echo "Failures worth looking at:"
+    local p
+    for p in "${real[@]}"; do
+      printf '  %-44s %s\n' "${p}" "$(first_error "${p}")"
+    done
+  fi
+
+  if [[ ${n_harness} -gt 0 ]]; then
+    echo; echo "Unresolved sibling artefacts -- our isolation, not Maven:"
+    printf '  %s\n' "${harness[@]}" | paste -sd' ' - | fold -s -w 96 | sed 's/^/  /'
+  fi
+}
+
+report=$(render)
+echo "${report}"
+
+# HTML for the mail: a plain-text table gets cut off at the reader's window
+# width, and the interesting part of a Maven error is at the end of the line.
+# A table wraps instead of truncating, and the log path is selectable.
+html_escape() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+
+render_html() {
+  echo "<html><body style=\"font-family:-apple-system,sans-serif;font-size:14px\">"
+  echo "<h2>Compatibility matrix: ${variant} on $(hostname -s)</h2>"
+  echo "<p>$(date '+%F %T')</p>"
+  echo "<table cellpadding=4 style=\"border-collapse:collapse\">"
+  printf '<tr><td>components</td><td align=right><b>%d</b></td></tr>' "${total}"
+  printf '<tr><td>ok</td><td align=right><b>%d</b></td></tr>' "${ok}"
+  printf '<tr><td>failed (real)</td><td align=right><b>%d</b></td><td>%s</td></tr>' \
+    "${n_real}" "$([[ -n "${delta}" ]] && { [[ ${delta} -gt 0 ]] && echo "+${delta} vs previous" || { [[ ${delta} -lt 0 ]] && echo "${delta} vs previous" || echo "unchanged"; }; })"
+  printf '<tr><td>failed (our isolation)</td><td align=right>%d</td></tr>' "${n_harness}"
+  printf '<tr><td>not a Maven project</td><td align=right>%d</td></tr>' "${warn}"
+  echo "</table>"
+
+  if [[ -n "${new_failures:-}" ]]; then
+    echo "<h3 style=\"color:#b00\">New failures since the previous run</h3><ul>"
+    echo "${new_failures}" | sed '/^$/d' | html_escape | sed 's|.*|<li><code>&</code></li>|'
+    echo "</ul>"
+  fi
+  if [[ -n "${gone:-}" ]]; then
+    echo "<h3 style=\"color:#070\">Fixed since the previous run</h3><ul>"
+    echo "${gone}" | sed '/^$/d' | html_escape | sed 's|.*|<li><code>&</code></li>|'
+    echo "</ul>"
+  fi
+
+  if [[ ${n_real} -gt 0 ]]; then
+    echo "<h3>Failures worth looking at</h3>"
+    echo "<table cellpadding=6 style=\"border-collapse:collapse;border:1px solid #ccc\">"
+    local p
+    for p in "${real[@]}"; do
+      printf '<tr style=\"border-top:1px solid #eee\"><td valign=top><code><b>%s</b></code><br><span style=\"color:#888;font-size:11px\">%s</span></td><td>%s</td></tr>' \
+        "$(printf '%s' "${p}" | html_escape)" \
+        "$(printf 'variants/%s/logs/%s/' "${variant}" "${p}" | html_escape)" \
+        "$(first_error "${p}" | html_escape)"
+    done
+    echo "</table>"
+  fi
+
+  if [[ ${n_harness} -gt 0 ]]; then
+    echo "<h3>Unresolved sibling artefacts &mdash; our isolation, not Maven</h3><p><code>"
+    printf '%s\n' "${harness[@]}" | html_escape | paste -sd' ' -
+    echo "</code></p>"
+  fi
+  echo "</body></html>"
+}
+
+if [[ -n "${mailto}" ]]; then
+  subject="compat ${variant}: ${ok} ok, ${n_real} failed"
+  [[ -n "${new_failures:-}" ]] && subject="${subject} (NEW failures)"
+  if command -v sendmail >/dev/null 2>&1; then
+    {
+      echo "To: ${mailto}"
+      echo "Subject: ${subject}"
+      echo "MIME-Version: 1.0"
+      echo "Content-Type: text/html; charset=UTF-8"
+      echo
+      render_html
+    } | sendmail -t && echo && echo "(mailed as HTML to ${mailto})"
+  elif command -v mail >/dev/null 2>&1; then
+    echo "${report}" | mail -s "${subject}" "${mailto}" && echo && echo "(mailed as text to ${mailto})"
+  fi
+fi
+
+# --- update baseline ------------------------------------------------------
+if [[ "${use_baseline}" == "true" ]]; then
+  mkdir -p "${root}/var"
+  { printf 'real\t%d\n' "${n_real}"; printf '%s\n' ${real[@]+"${real[@]}"}; } > "${base_file}"
+fi
+exit 0
