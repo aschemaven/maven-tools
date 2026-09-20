@@ -17,3 +17,7 @@ svn/repository-tools
 # final-release/retirement commit 2026-05-25. Not worth chasing to M4-green.
 # (Only this one plugin is retired; the rest of doxia/ stays in the survey.)
 doxia/tools/doxia-book-maven-plugin
+
+# Not a Maven project -- it only ever produced a "warn" cell in the matrix
+# and a line of noise in the report.
+studies/master
