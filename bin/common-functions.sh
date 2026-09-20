@@ -526,7 +526,6 @@ exec_mvn() {
   local v_logroot="${root}/logs"
   local v_settings="${SETTINGS}"
   local v_iso_root="${MAVEN_TOOLS_CACHE}/.m2-isolated"
-  local v_repo=""            # empty => keep the caller-provided maven.repo.local
   local v_javahome=""
   if [[ -n "${variant}" ]]; then
     if ! variant_exists "${variant}"; then
@@ -538,7 +537,6 @@ exec_mvn() {
     v_logroot="${v_root}/logs"
     v_settings="$(variant_settings "${variant}")"
     v_iso_root="${v_root}/repository/isolated"
-    v_repo="${v_root}/repository"
     v_javahome="$(find_java_home "$(variant_jdk "${variant}")")"
   fi
 
@@ -550,10 +548,19 @@ exec_mvn() {
   test ! -d "${project_dir}" && echo "${project} does not exist" >&2 && return
   mkdir -p "${v_logroot}/${project}"
 
-  # Variant base local repo: override the caller's -Dmaven.repo.local. A
-  # per-project isolated repo (appended later) still wins over this.
+  # Variant isolation WITHOUT a second local repository. The shared cache under
+  # MAVEN_TOOLS_CACHE stays in place -- a downloaded artefact is the same
+  # whoever fetched it -- and only what this variant INSTALLS is kept apart,
+  # through the Enhanced LRM's split prefix (split is already enabled above).
+  #
+  # Giving each variant its own maven.repo.local was the previous approach. It
+  # cost 2.7 GB per variant, re-downloaded everything, and broke sibling
+  # resolution: "clean verify" installs nothing, so a component needing a
+  # sibling SNAPSHOT looked into an essentially empty repository and failed
+  # with "Could not find artifact ...-SNAPSHOT". Fourteen of the twenty-one
+  # failures in the first full matrix run had that single cause.
   if [[ -n "${variant}" ]]; then
-    opts="${opts} -Dmaven.repo.local=${v_repo}"
+    opts="${opts} -Daether.enhancedLocalRepository.localPrefix=installed/${variant}"
   fi
 
   # When 'clean' is part of the requested goals, recursively wipe

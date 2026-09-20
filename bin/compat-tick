@@ -45,7 +45,9 @@ source "${dir}/common-functions.sh"
 : "${NIGHTLY_END:=6}"
 : "${IDLE_MIN_SECONDS:=600}"
 : "${COMPAT_SYNC:=auto}"
-: "${MATRIX_GOALS:=-Prun-its clean verify}"
+# "install", not "verify": components resolve sibling SNAPSHOTs from the
+# variant's install prefix, and only an install puts them there.
+: "${MATRIX_GOALS:=-P?run-its clean install}"
 export PARALLEL_JOBS MATRIX_GOALS
 
 maven_dir="${root}/${MAVEN_PROJECTS_DIR}"

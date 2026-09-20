@@ -30,7 +30,9 @@ set -eu -o pipefail
 dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
 
-: "${MATRIX_GOALS:=-Prun-its clean verify}"
+# "install", not "verify": components resolve sibling SNAPSHOTs from the
+# variant's install prefix, and only an install puts them there.
+: "${MATRIX_GOALS:=-P?run-its clean install}"
 # Optional cell namespace: cells go to variants/<v>/cells/<MATRIX_NS>/<project>.
 # Used by run-compat-4x (MATRIX_NS=_4x) so worktree-built 4.x lines do not
 # collide with the manifest cells and render in the 4.x-native section.
