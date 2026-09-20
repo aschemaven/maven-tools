@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""check-build-order - verify that every supplier is built before its consumers.
+
+The matrix builds one component at a time, in the order of the repo manifest,
+and each installs into the variant's prefix. That only works when a component
+producing a SNAPSHOT appears BEFORE every component consuming it. The order is
+maintained by hand, so nothing enforced it -- and a violation does not fail
+loudly, it fails as "Could not find artifact ...-SNAPSHOT", which is easy to
+mistake for an infrastructure problem. Fourteen of twenty-one failures in the
+first full matrix run looked exactly like that.
+
+Reads every pom.xml under the source tree, maps groupId:artifactId to the
+component that produces it, then checks each SNAPSHOT dependency and plugin
+against that map.
+
+Exit status 1 if an ordering violation is found, 0 otherwise.
+"""
+import os
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+
+def text(node, path):
+    el = node.find(path, NS)
+    return el.text.strip() if el is not None and el.text else None
+
+
+def component_of(pom_path, root):
+    """The manifest component a pom belongs to: its longest matching prefix."""
+    rel = os.path.relpath(pom_path, root)
+    return rel
+
+
+def main():
+    root = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/wrk/maven/maven")
+    listing = os.path.join(root, ".repo", "project.list")
+    if not os.path.exists(listing):
+        sys.exit(f"no project list at {listing}")
+    with open(listing) as fh:
+        order = [l.strip() for l in fh if l.strip()]
+    position = {c: i for i, c in enumerate(order)}
+
+    # Which component owns a given path?
+    def owner(path):
+        rel = os.path.relpath(path, root)
+        best = None
+        for c in order:
+            if rel == c or rel.startswith(c + os.sep):
+                if best is None or len(c) > len(best):
+                    best = c
+        return best
+
+    produces = {}   # "group:artifact" -> component
+    consumes = {}   # component -> set of "group:artifact" (SNAPSHOT only)
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Integration-test fixtures carry their own coordinates and are
+        # frequently duplicated between sibling components (both compiler
+        # plugins ship an "org.apache.maven.plugins.compiler.it:a"). They are
+        # never resolved from the repository, so counting them produces pure
+        # noise -- sixteen false violations on the first run.
+        skip = (".repo", "target", "it", "test")
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        if any(part in dirpath.split(os.sep) for part in (".repo", "target")) \
+           or f"{os.sep}src{os.sep}it" in dirpath or f"{os.sep}src{os.sep}test" in dirpath:
+            continue
+        if "pom.xml" not in filenames:
+            continue
+        pom = os.path.join(dirpath, "pom.xml")
+        comp = owner(pom)
+        if comp is None:
+            continue
+        try:
+            tree = ET.parse(pom)
+        except ET.ParseError:
+            continue
+        r = tree.getroot()
+        gid = text(r, "m:groupId") or text(r, "m:parent/m:groupId")
+        aid = text(r, "m:artifactId")
+        if gid and aid:
+            produces.setdefault(f"{gid}:{aid}", comp)
+        for dep in r.iterfind(".//m:dependency", NS) :
+            dg, da, dv = text(dep, "m:groupId"), text(dep, "m:artifactId"), text(dep, "m:version")
+            if dg and da and dv and "SNAPSHOT" in dv:
+                consumes.setdefault(comp, set()).add(f"{dg}:{da}")
+        for pl in r.iterfind(".//m:plugin", NS):
+            pg = text(pl, "m:groupId") or "org.apache.maven.plugins"
+            pa, pv = text(pl, "m:artifactId"), text(pl, "m:version")
+            if pa and pv and "SNAPSHOT" in pv:
+                consumes.setdefault(comp, set()).add(f"{pg}:{pa}")
+
+    violations = []
+    for comp, needs in sorted(consumes.items()):
+        if comp not in position:
+            continue
+        for ga in sorted(needs):
+            src = produces.get(ga)
+            if src is None or src == comp or src not in position:
+                continue
+            if position[src] > position[comp]:
+                violations.append((comp, position[comp], ga, src, position[src]))
+
+    print(f"components in manifest : {len(order)}")
+    print(f"artefacts produced     : {len(produces)}")
+    print(f"components with SNAPSHOT dependencies: {len(consumes)}")
+    if not violations:
+        print("\nno ordering violations: every supplier is built before its consumers")
+        return 0
+    print(f"\n{len(violations)} ordering violation(s) -- consumer built before supplier:\n")
+    for comp, cpos, ga, src, spos in violations:
+        print(f"  {comp} (#{cpos})")
+        print(f"      needs {ga}")
+        print(f"      built by {src} (#{spos}) -- too late\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

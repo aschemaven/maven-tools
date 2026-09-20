@@ -1,0 +1,86 @@
+#!/bin/bash
+
+set -eu -o pipefail
+
+# compute-build-order - let Maven work out the component order, do not guess it.
+#
+# SYNOPSIS
+#     compute-build-order [--write]
+#
+# DESCRIPTION
+#     Generates a throwaway aggregator POM listing every component of the
+#     source tree as a module, runs a validate-only build over it, and reads
+#     back the order Maven itself computed from the dependency graph.
+#
+#     This does NOT build the reactor. Maven resolves and prints the build
+#     order before executing anything, and "--fail-never" keeps it walking
+#     past components that do not validate under the chosen Maven. The run
+#     costs a few minutes and touches no artefacts.
+#
+#     Why bother: the matrix builds one component at a time and each installs
+#     for the next, so a supplier listed after its consumer fails with
+#     "Could not find artifact ...-SNAPSHOT" -- which reads like an
+#     infrastructure problem, not like a sorting mistake. The manifest order
+#     is maintained by hand and currently correct (see check-build-order), but
+#     nothing keeps it that way.
+#
+# OPTIONS
+#     --write   replace build-order.txt with the computed order
+#
+# ENVIRONMENT
+#     MAVEN_PROJECTS_DIR   source tree (default: maven)
+#     ORDER_MVN_VERSION    SDKman Maven to use (default: 3.9.16)
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+source "${dir}/common-functions.sh"
+
+write=false
+[[ "${1:-}" == "--write" ]] && write=true
+
+src="${root}/${MAVEN_PROJECTS_DIR:-maven}"
+mvn_bin="${HOME}/.sdkman/candidates/maven/${ORDER_MVN_VERSION:-3.9.16}/bin/mvn"
+[[ -x "${mvn_bin}" ]] || { echo "no Maven at ${mvn_bin}" >&2; exit 1; }
+
+work=$(mktemp -d)
+trap 'rm -rf "${work}"' EXIT
+
+{
+  echo '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+  echo '  <modelVersion>4.0.0</modelVersion>'
+  echo '  <groupId>net.aschemann.maven-tools</groupId>'
+  echo '  <artifactId>build-order-probe</artifactId>'
+  echo '  <version>1</version>'
+  echo '  <packaging>pom</packaging>'
+  echo '  <modules>'
+  while IFS= read -r c; do
+    [[ -n "${c}" && -f "${src}/${c}/pom.xml" ]] || continue
+    printf '    <module>%s/%s</module>\n' "$(realpath --relative-to="${work}" "${src}" 2>/dev/null || echo "${src}")" "${c}"
+  done < "${src}/.repo/project.list"
+  echo '  </modules>'
+  echo '</project>'
+} > "${work}/pom.xml"
+
+echo "[$(date '+%F %T')] resolving reactor order over $(grep -c '<module>' "${work}/pom.xml") components"
+
+# "Building <name>" lines appear in reactor order; --fail-never keeps walking.
+"${mvn_bin}" -B -f "${work}/pom.xml" --fail-never -o validate 2>/dev/null \
+  | grep -E '^\[INFO\] Building ' \
+  | sed 's/^\[INFO\] Building //' > "${work}/order.txt" || true
+
+n=$(grep -c . "${work}/order.txt" 2>/dev/null || echo 0)
+echo "[$(date '+%F %T')] Maven reported ${n} modules in reactor order"
+
+if [[ "${n}" -lt 2 ]]; then
+  echo "could not read a reactor order -- see the aggregator at ${work}" >&2
+  trap - EXIT
+  exit 1
+fi
+
+if [[ "${write}" == "true" ]]; then
+  cp "${work}/order.txt" "${root}/build-order.txt"
+  echo "written to ${root}/build-order.txt"
+else
+  head -12 "${work}/order.txt"
+  echo "..."
+fi
