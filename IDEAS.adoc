@@ -1,0 +1,141 @@
+= Ideas and Open Questions
+:toc:
+
+Things worth building, with what is already known about them.
+Nothing here is a commitment; an entry graduates into the architecture documentation under `docs/` or is dropped.
+Tracked at the repository root deliberately, so the backlog does not have to follow the arc42 structure.
+
+== A third matrix axis: plugin versions
+
+The compatibility matrix varies the *Maven version* and holds the components fixed.
+Upstream practice raises the mirror image of that question: when a plugin gets a new trunk SNAPSHOT, every project using it is lifted onto that SNAPSHOT and rebuilt, integration tests included.
+A matrix that varied the *plugin version* instead would surface those breakages before the wider ecosystem hits them.
+
+=== What the graph already tells us
+
+The published graph holds every POM of the survey, so the blast radius of a plugin change is a query rather than a guess.
+
+[source,cypher]
+----
+MATCH (pom:Maven:Pom:Xml)-[:USES_PLUGIN]->(pl:Maven:Plugin)-[:IS_ARTIFACT]->(a:Maven:Artifact)
+WHERE a.group = 'org.apache.maven.plugins'
+RETURN a.name AS plugin, count(DISTINCT pom) AS poms, count(DISTINCT a.version) AS versions
+ORDER BY poms DESC
+----
+
+Measured on the store of 2026-09-17:
+
+|===
+|Plugin |POMs using it |Distinct versions in use
+
+|maven-surefire-plugin
+|960
+|27
+
+|maven-jar-plugin
+|471
+|21
+
+|maven-compiler-plugin
+|361
+|25
+
+|maven-assembly-plugin
+|248
+|10
+
+|maven-javadoc-plugin
+|199
+|19
+
+|maven-enforcer-plugin
+|187
+|16
+|===
+
+Two readings of that table matter.
+
+The blast radius is large:: A new surefire SNAPSHOT touches 960 POMs.
+Rebuilding all of them with integration tests is a far bigger job than the 125 cells of the Maven-version matrix, so this axis cannot simply be added to the existing nightly.
+
+The version spread is the real finding:: 27 different surefire versions and 25 compiler versions are in use across the survey.
+That spread is itself a source of inconsistent results, independent of any new SNAPSHOT.
+
+=== Does the problem actually occur?
+
+The question was whether a new plugin release breaking a *different* component is frequent enough to justify the machinery.
+Partial evidence, from the same store:
+
+* 932 issues across the 112 repositories carry "regression" or "broke" in the title.
+* Of those, 95 sit in `apache/maven` alone and also mention a plugin.
+
+Those counts look impressive but do not carry the weight first attributed to them: the titles were counted, not read, and "mentions a plugin" is far from "was broken by a plugin release".
+
+Once the mailing-list search was repaired (see below) the archive gave a sharper answer, and it argues *against* the third axis.
+Across 287,000 messages and two decades, the literal phrases "breaks/broke the/our build" appear 41 times on `dev@` and 49 times on `users@` -- and barely at all since 2018 (2018: 1, 2021: 1, 2023: 2, none on `users@`).
+The decline most likely reflects the move to GitHub issues rather than a decline in breakage, but even generously read this is not a drumbeat that justifies multiplying the build matrix.
+
+[TIP]
+====
+The archive did surface a better argument, and it is about latency rather than frequency.
+In February 2017 a committer wrote: "Christian Schulte asked me a couple of days ago whether I am able to build Surefire master with Maven master. It was constantly failing for him on his OpenBSD machines."
+
+Plugin master against Maven master, broken for some time, and discovered because one person happened to ask another.
+That is the gap a matrix closes -- and the *existing* two axes already cover it.
+====
+
+[NOTE]
+====
+The mailing-list MCP could not confirm the frequency, but the archive can.
+Querying its Elasticsearch index (287,000 messages across `maven-dev` and `maven-users`) directly, with the subject field boosted and phrases like "broke the build" weighted, returns exactly the phenomenon -- `r1639526 in maven-project-info-reports breaks the build` (2014), `M206 Regression: Build is broken` (2007), commit threads on the enforcer and shade plugin trunks.
+The same question through the MCP returned only the most recent release announcements, whatever the query terms.
+
+So the limitation is the MCP's query construction, not the corpus and not the retrieval method.
+That is worth reporting to the mail-mcp project before anyone reaches for a different indexing approach.
+====
+
+=== Would vector search help here?
+
+Probably, but not first, and not as a replacement.
+
+The gap BM25 leaves is vocabulary:: A search for "a plugin release broke a downstream component" does not lexically match "r1639526 in maven-project-info-reports breaks the build".
+Dense retrieval closes exactly that gap, and hybrid ranking (BM25 and kNN combined through reciprocal rank fusion) is natively available in the Elasticsearch 8.11 already running here -- no new infrastructure.
+
+The cheaper wins come first:: Field boosting, phrase matching and date filters turned an unusable result set into a useful one in a single query, as the note above shows.
+The index also carries extracted metadata that no ranking currently exploits: JIRA references, GitHub commit and PR references, vote flags and decision keywords.
+Filtering on those is more precise than any similarity score, because it is structured rather than inferred.
+
+=== Open questions before building anything
+
+. Which plugins are worth watching?
+  Surefire, compiler and jar cover most of the blast radius; the long tail probably does not earn a nightly.
+. Where does it run?
+  The existing matrix already saturates a machine for hours, and this axis is an order of magnitude larger.
+. What is the trigger?
+  A plugin's trunk moving is the obvious signal, and `compat-tick` already has the two-axis machinery to build on.
+
+== Smaller open items
+
+Distributions for the remaining lines:: `maven-dists.txt` covers 4.0.x only.
+`core/3.x/maven-3` builds 3.10.0-SNAPSHOT and `core/maven` builds 4.1.0-SNAPSHOT, so both could be added the same way once 4.0.x has earned its keep.
+
+The matrix has no scheduler:: `compat-tick` renders a launchd template but no agent is loaded on either machine, and the last results date from 2026-06-21.
+godestorm is the intended home, as a `runner` role.
+
+A plugin bug worth reporting upstream:: `GitHubIssueScannerPlugin.connect()` chains `fromPropertyFile()` and `fromEnvironment()` inside one try block.
+A missing `~/.github` therefore aborts before the environment is ever consulted, and the scanner falls back to anonymous access at 60 requests per hour -- which presents as slowness, not as failure.
+
+== Keep base images and pinned dependencies fresh
+
+Pinning stops the `:latest` lottery but starts a slower rot, and this project has now been bitten from both directions.
+
+`compose.yml` pins `yuzutech/kroki:0.32.1` because a plain `:latest` had been serving a build from May 2025 out of the local image cache, and `neo4j:5.26.20-community` is pinned for the same reason.
+Nothing refreshes either.
+
+The opposite failure hit mail-mcp on 2026-09-18: its `pyproject.toml` declared `mcp>=0.9.0` with no upper bound, so the first rebuild in months resolved to `mcp` 2.x, where `FastMCP` had been renamed to `MCPServer`.
+The container went into a crash loop and the running MCP server was down until the range was bounded to `<2`.
+
+Dependabot handles both shapes -- `docker` for base images, `pip` for Python ranges -- and raises a reviewable pull request rather than changing anything silently.
+mail-mcp already has it configured (there are open `dependabot/docker/python-3.14-slim` branches); maven-tools does not, and its images are pinned by hand.
+
+The rule worth adopting: every pin needs a refresh mechanism, and every range needs an upper bound.

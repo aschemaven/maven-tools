@@ -23,6 +23,9 @@ reports/
 # Written every run and published to the "data" branch by jqa-nightly; tracking
 # them here would dirty the worktree after every single night.
 metrics/
+# Unpacked Maven distributions for the compatibility matrix. Normally under
+# MAVEN_TOOLS_CACHE; lands here when that variable is unset (direnv not loaded).
+dists/
 # Scheduler state: last-seen refs and last-run status. Regenerable -- losing it
 # just makes the next nightly build every project once.
 var/

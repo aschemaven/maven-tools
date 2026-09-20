@@ -6,5 +6,5 @@
 ** xref:07-deployment.adoc[7. Deployment View]
 ** xref:08-concepts.adoc[8. Crosscutting Concepts]
 ** xref:09-decisions.adoc[9. Architecture Decisions]
-* Anhang
-** xref:performance-findings.adoc[Performance-Befunde]
+* Appendix
+** xref:performance-findings.adoc[Performance Findings]
