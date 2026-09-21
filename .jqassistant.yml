@@ -28,6 +28,9 @@ jqassistant:
     - group-id: net.aschemann.jqassistant.plugins
       artifact-id: jqa-groovy-plugin
       version: 0.2.0-SNAPSHOT
+    - group-id: net.aschemann.jqassistant.plugins
+      artifact-id: jqa-github-config-plugin
+      version: 0.1.1-SNAPSHOT
     - group-id: de.kontext-e.jqassistant.plugin
       artifact-id: jqassistant.plugin.git
       version: 2.4.3-SNAPSHOT
@@ -37,6 +40,10 @@ jqassistant:
     include:
       files:
         - .git
+        # GitHub Actions workflows and the rest of .github/, read by the
+        # github-config plugin. Without this the directory scanner never
+        # descends into it and the plugin sees nothing.
+        - .github
     properties:
       directory.follow-symbolic-links: true
       maven3.dependencies.scan: true
