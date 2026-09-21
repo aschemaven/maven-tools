@@ -823,7 +823,7 @@ LICENCE
   _load=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')
   local _timings="${root}/metrics/project-timings.tsv"
   if [[ ! -f "${_timings}" ]]; then
-    mkdir -p "${root}/reports"
+    mkdir -p "$(dirname "${_timings}")"
     printf 'ended_at\ttask\tproject\tseconds\tstatus\tload1\tvariant\n' > "${_timings}"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
