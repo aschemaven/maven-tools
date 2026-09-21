@@ -405,18 +405,18 @@ fi
 # Set MAVEN_LRM_SPLIT=false to opt out.
 if [[ "${MAVEN_LRM_SPLIT:-true}" == "true" ]]; then
   if true; then
-    # On the COMMAND LINE, not in MAVEN_OPTS. Maven processes forked by
-    # integration tests inherit the environment, and the split layout is
-    # wrong for them: invoker:install lays out its test repository by hand,
-    # flat, because it never goes through a local repository manager and so
-    # knows nothing about split prefixes. A forked build that inherited the
-    # split then looked under installed/ for what the invoker had written
-    # flat, and a plugin could not find itself.
-    # Their test repositories are per-project and thrown away with clean, so
-    # a flat layout there costs nothing. Measured: no forked build writes
-    # flat into the shared repository -- the only top-level entries touched
-    # today were .meta and .locks.
-    LRM_SPLIT_CLI="-Daether.enhancedLocalRepository.split=true -Daether.enhancedLocalRepository.splitLocal=true -Daether.enhancedLocalRepository.splitRemote=true"
+    # In MAVEN_OPTS, so that forked Maven processes inherit it. Measured the
+    # hard way: moving this to the command line -- where it is not inherited
+    # -- took the matrix from 23 failures to 51, because every forked build
+    # using the SHARED repository then looked flat and missed everything
+    # installed under the prefix.
+    #
+    # The cost is invoker integration tests: invoker:install lays out its own
+    # per-project test repository by hand, flat, so a forked build that
+    # inherits the split cannot find what the invoker put there. Those
+    # projects belong on lrm-split-skip-projects.txt, which is what that
+    # list is for.
+    export MAVEN_OPTS="${MAVEN_OPTS:-} -Daether.enhancedLocalRepository.split=true -Daether.enhancedLocalRepository.splitLocal=true -Daether.enhancedLocalRepository.splitRemote=true"
   fi
 fi
 
@@ -570,9 +570,6 @@ exec_mvn() {
   # sibling SNAPSHOT looked into an essentially empty repository and failed
   # with "Could not find artifact ...-SNAPSHOT". Fourteen of the twenty-one
   # failures in the first full matrix run had that single cause.
-  # Split applies to every build of ours, variant or not -- the nightly
-  # relies on it too. Only the install prefix is per variant.
-  opts="${opts} ${LRM_SPLIT_CLI:-}"
   if [[ -n "${variant}" ]]; then
     opts="${opts} -Daether.enhancedLocalRepository.localPrefix=installed/${variant}"
   fi
@@ -798,6 +795,11 @@ LICENCE
       cd "${project_dir}"
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
+      # Prefix in the ENVIRONMENT as well, so forked builds resolve from where
+      # the outer build installs. On the command line alone it reached the
+      # outer build only, and a component could not find what it had just
+      # installed.
+      [[ -n "${variant}" ]] && export MAVEN_OPTS="${MAVEN_OPTS:-} -Daether.enhancedLocalRepository.localPrefix=installed/${variant}"
       # Variant install prefix in the ENVIRONMENT, so that forked Maven
       # processes (invoker ITs, mvnd) resolve from where the outer build
       # installs. On the command line it reached the outer build only, and

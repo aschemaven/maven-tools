@@ -166,3 +166,16 @@ fi
 
 echo "Matrix complete: ${total} cell(s) written under variants/*/cells/."
 echo "Render the table with: ${dir}/compat-render"
+
+# Report without being asked. A summary that has to be fetched by hand is a
+# summary nobody reads: compat-report existed for a day before anyone noticed
+# it had never been wired to anything.
+#
+# COMPAT_MAIL selects the recipient; unset means print only.
+for _v in "${matrix_variants[@]}"; do
+  if [[ -n "${COMPAT_MAIL:-}" ]]; then
+    "${dir}/compat-report" --variant "${_v}" --mail "${COMPAT_MAIL}" || true
+  else
+    "${dir}/compat-report" --variant "${_v}" || true
+  fi
+done
