@@ -598,12 +598,15 @@ exec_mvn() {
   # Projects that ship their own *tracked* .mvn/extensions.xml are left
   # untouched -- overwriting would corrupt tracked content (e.g. surefire's
   # mostly-commented template, Maven 4 core's build-cache extensions).
-  # core/maven never gets extensions (its bootstrap build breaks with them).
+  # No maven-core line ever gets extensions: its bootstrap IT forks Maven
+  # processes that each open mimir's daemon lock under ~/.mimir, which is
+  # global across cells. Under PARALLEL_JOBS>1 they contend and the build
+  # dies with "Failed to gain exclusive access to storage".
   ext=""
   local want_mimir="false" want_dev="false"
   [[ "${USE_MIMIR:-true}" == "true" ]] && want_mimir="true"
   [[ "${USE_DEVELOCITY:-false}" == "true" ]] && want_dev="true"
-  if [[ "${project}" == "core/maven" ]]; then
+  if [[ "${project}" == core/maven* ]]; then
     ext=" (no extension)"
   elif [[ "${want_mimir}" == "true" || "${want_dev}" == "true" ]]; then
     local own_ext="${project_dir}/.mvn/extensions.xml"
