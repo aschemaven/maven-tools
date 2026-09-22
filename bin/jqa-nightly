@@ -175,15 +175,21 @@ notify_failure() {
   local stage="$1" logdir="$2"
   local title="jQA nightly FAILED: ${stage}"
   local msg="host $(hostname -s), see ${logdir}"
-  if command -v terminal-notifier >/dev/null 2>&1; then
-    terminal-notifier -title "${title}" -message "${msg}" >/dev/null 2>&1 || true
-  elif command -v osascript >/dev/null 2>&1; then
-    osascript -e "display notification \"${msg}\" with title \"${title}\"" >/dev/null 2>&1 || true
-  fi
+  # The mail goes FIRST. A desktop notification can block forever when no
+  # session can display it -- measured on godestorm over ssh, where
+  # terminal-notifier hung for 25 minutes, the run never advanced past the
+  # first failed stage and the mail that was supposed to report it was never
+  # sent. The notifier is a convenience; the mail is the actual channel.
   if [[ -n "${NIGHTLY_MAIL}" ]] && command -v mail >/dev/null 2>&1; then
     printf 'Stage: %s\nHost: %s\nLogs: %s\nTime: %s\n' \
       "${stage}" "$(hostname -s)" "${logdir}" "$(stamp)" \
       | mail -s "${title}" "${NIGHTLY_MAIL}" 2>/dev/null || true
+  fi
+  # Detached: "|| true" catches a failure, never a hang.
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    ( terminal-notifier -title "${title}" -message "${msg}" >/dev/null 2>&1 & ) || true
+  elif command -v osascript >/dev/null 2>&1; then
+    ( osascript -e "display notification \"${msg}\" with title \"${title}\"" >/dev/null 2>&1 & ) || true
   fi
 }
 
