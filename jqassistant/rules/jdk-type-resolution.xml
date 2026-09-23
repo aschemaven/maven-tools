@@ -1,0 +1,61 @@
+<jqassistant-rules xmlns="http://schema.jqassistant.org/rule/v2.2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://schema.jqassistant.org/rule/v2.2 https://jqassistant.github.io/jqassistant/current/schema/jqassistant-rule-v2.2.xsd">
+
+    <!--
+      jQAssistant resolves types PER ARTIFACT. A project that merely references
+      java.lang.RuntimeException gets its own placeholder node for it, with no
+      EXTENDS of its own - measured: 366 such nodes for that one type. Scanning
+      the JDK does not change that; it adds one more artifact whose types are
+      correct but unrelated to the placeholders. Verified on a two-scan store:
+      after scanning java.base and then plexus-utils, "java.lang.RuntimeException"
+      existed twice, only the JDK one linked.
+
+      These concepts close that gap. The JDK's hierarchy is the single source of
+      truth in the graph, and every unresolved placeholder gets ONE edge into it
+      - not a copy of the chain per artifact.
+    -->
+    <group id="jdk">
+        <includeConcept refId="jdk:Artifact"/>
+        <includeConcept refId="jdk:ResolveSuperClass"/>
+        <includeConcept refId="jdk:ResolveInterfaces"/>
+    </group>
+
+    <concept id="jdk:Artifact">
+        <description>Labels the scanned JDK artifact as :Jdk, identified by the fact that it declares java.lang.Object.</description>
+        <cypher><![CDATA[
+MATCH (a:Java:Artifact)-[:CONTAINS]->(:Java:Type {fqn: 'java.lang.Object'})
+SET a:Jdk
+RETURN count(a) AS jdkArtifacts
+        ]]></cypher>
+    </concept>
+
+    <concept id="jdk:ResolveSuperClass">
+        <requiresConcept refId="jdk:Artifact"/>
+        <description>Links every unresolved placeholder type to the super class of its JDK counterpart, so EXTENDS* reaches java.lang.Object from anywhere.</description>
+        <cypher><![CDATA[
+MATCH (:Jdk)-[:CONTAINS]->(jdk:Java:Type)-[:EXTENDS]->(jdkSuper:Java:Type)
+MATCH (local:Java:Type {fqn: jdk.fqn})
+WHERE local <> jdk
+  AND NOT (local)-[:EXTENDS]->()
+MERGE (local)-[r:EXTENDS]->(jdkSuper)
+  ON CREATE SET r.jdkResolved = true
+RETURN count(r) AS resolvedSuperClasses
+        ]]></cypher>
+    </concept>
+
+    <concept id="jdk:ResolveInterfaces">
+        <requiresConcept refId="jdk:Artifact"/>
+        <description>Same for implemented interfaces, so questions like "which types are Serializable" work across artifacts.</description>
+        <cypher><![CDATA[
+MATCH (:Jdk)-[:CONTAINS]->(jdk:Java:Type)-[:IMPLEMENTS]->(jdkIface:Java:Type)
+MATCH (local:Java:Type {fqn: jdk.fqn})
+WHERE local <> jdk
+  AND NOT (local)-[:IMPLEMENTS]->()
+MERGE (local)-[r:IMPLEMENTS]->(jdkIface)
+  ON CREATE SET r.jdkResolved = true
+RETURN count(r) AS resolvedInterfaces
+        ]]></cypher>
+    </concept>
+
+</jqassistant-rules>

@@ -50,6 +50,9 @@ jqassistant:
   analyze:
     groups:
       - default
+      # Wires each artifact's placeholder types into the scanned JDK's
+      # hierarchy; without it EXTENDS* stops at the JDK boundary.
+      - jdk
       - dependency-reports
       - external-dependency-scm
     rule:

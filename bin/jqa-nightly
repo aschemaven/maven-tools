@@ -446,6 +446,39 @@ exclude_from_backup() {
 }
 exclude_from_backup "${store_dir}"
 
+# --- 1b. seed the fresh store with the JDK graph --------------------------
+# jQAssistant resolves types per artifact, so a project that references
+# java.lang.RuntimeException gets its own placeholder with no EXTENDS of its
+# own; on the published graph that one type existed 366 times, none linked.
+# Every inheritance question therefore died at the JDK boundary.
+#
+# The JDK is scanned ONCE per JDK version into jqassistant/base-jdk-<version>
+# (about a minute, 338 MB) and copied in here, so a rebuild starts from a
+# store that already knows java.lang.* instead of paying the scan nightly.
+# The jdk:* concepts in jqassistant/rules/jdk-type-resolution.xml then wire
+# each artifact's placeholders into that hierarchy during analyze.
+#
+# A missing base is a degradation, not a failure: the graph is still complete,
+# only inheritance chains stop where they always used to.
+if [[ "${rebuild}" == true ]]; then
+  # JQA_STORE_SUFFIX is exported above, and scan-jdk honours it -- which would
+  # make it scan the JDK straight into tonight's store instead of handing back
+  # the reusable base. Measured: 60s per run instead of a 0.6s copy, plus a
+  # misleading "no JDK base store" because the captured output is then Maven's,
+  # not a path. Unset it for this one call.
+  jdk_base="$(env -u JQA_STORE_SUFFIX ./bin/scan-jdk 2>/dev/null | tail -1)"
+  if [[ -n "${jdk_base}" && -d "${jdk_base}" ]]; then
+    mkdir -p "${store_dir}"
+    if rsync -a --exclude .complete "${jdk_base}/" "${store_dir}/"; then
+      echo "[$(stamp)] seeded store from $(basename "${jdk_base}")"
+    else
+      echo "[$(stamp)] could not seed from $(basename "${jdk_base}")" >&2
+    fi
+  else
+    echo "[$(stamp)] no JDK base store; type hierarchies will stop at the JDK boundary" >&2
+  fi
+fi
+
 logdir=""
 run_stage() {                          # run_stage <stage> [PROJECTS]
   local stage="$1"; local projects="${2-}"

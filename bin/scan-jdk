@@ -1,0 +1,139 @@
+#!/bin/bash
+set -u -o pipefail
+
+# scan-jdk - put a JDK's class files into the store, once per JDK version.
+#
+# WHY
+#     jQAssistant resolves types PER ARTIFACT. A project that only references
+#     java.lang.RuntimeException gets its own placeholder node with no EXTENDS
+#     of its own; measured on the published graph, that one type existed 366
+#     times, none of them linked. Every question that walks an inheritance
+#     chain -- "is this catch clause checked or unchecked", "which exceptions
+#     derive from IOException" -- therefore died at the JDK boundary.
+#
+#     Scanning the JDK does NOT repair that by itself: it adds one more
+#     artifact whose types are correct but unrelated to the placeholders.
+#     Verified on a two-scan store -- after java.base and then plexus-utils,
+#     "java.lang.RuntimeException" existed twice, only the JDK one linked.
+#     The jqassistant/rules/jdk-type-resolution.xml concepts close the gap, in
+#     the analyze stage, by giving each placeholder ONE edge into the JDK's
+#     hierarchy. This script provides the data they need.
+#
+# WHICH JDK
+#     17 by default: Maven 4.0.x declares <javaVersion>17</javaVersion>,
+#     maven.compiler.release=17 and enforcer requireJavaVersion [17,), so 17 is
+#     the API surface the code is compiled against. The JDK a build RUNS on
+#     (21 in the compatibility matrix) is a different question.
+#
+# COST
+#     Extraction ~3s, merge a few seconds, scan ~2:40 for 26.8k classes. The
+#     extracted tree is cached per exact JDK version and reused, so only the
+#     scan is paid per run -- and that only until the store is reused.
+#
+# ENVIRONMENT
+#     JQA_SCAN_JDK_MAJOR   major version to scan (default 17)
+#     JQA_SCAN_JDK_VENDOR  SDKman vendor suffix (default tem)
+#     JQA_STORE_SUFFIX     store to write to, as for run-jqa
+#     JQA_STORE_URI        remote store; overrides JQA_STORE_SUFFIX
+#     JQA_MVN_VERSION      Maven for the jQAssistant call (default 3.9.16)
+
+dir=$(dirname "${0}")
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+
+: "${JQA_SCAN_JDK_MAJOR:=17}"
+: "${JQA_SCAN_JDK_VENDOR:=tem}"
+: "${JQA_VERSION:=2.9.0}"
+
+jdk_home="$(find_java_home "${JQA_SCAN_JDK_MAJOR}" "${JQA_SCAN_JDK_VENDOR}")"
+if [[ -z "${jdk_home}" || ! -x "${jdk_home}/bin/jimage" ]]; then
+  echo "scan-jdk: no JDK ${JQA_SCAN_JDK_MAJOR} (${JQA_SCAN_JDK_VENDOR}) with jimage found" >&2
+  exit 1
+fi
+jdk_version="$(basename "${jdk_home}")"
+classes="${MAVEN_TOOLS_CACHE}/jdk-scan/${jdk_version}/classes"
+
+# The extracted tree is a pure function of the JDK version, so a present
+# marker means the cache is complete -- the marker is written last.
+if [[ -f "${classes}/.complete" ]]; then
+  echo "scan-jdk: reusing extracted ${jdk_version} ($(find "${classes}" -name '*.class' | wc -l | tr -d ' ') classes)"
+else
+  echo "scan-jdk: extracting ${jdk_version}"
+  rm -rf "${classes}" "${classes}/../modules"
+  mkdir -p "${classes}" "${classes}/../modules"
+  "${jdk_home}/bin/jimage" extract --dir="${classes}/../modules" "${jdk_home}/lib/modules" || {
+    echo "scan-jdk: jimage extract failed" >&2; exit 1; }
+  # All modules into ONE tree: scanning the parent directory instead would put
+  # the module name into every fully qualified name (java.base.java.lang.Object).
+  for m in "${classes}/../modules"/*/; do
+    ( cd "${m}" && tar cf - . ) | ( cd "${classes}" && tar xf - ) 2>/dev/null
+  done
+  rm -f "${classes}/module-info.class"
+  rm -rf "${classes}/../modules"
+  touch "${classes}/.complete"
+  echo "scan-jdk: extracted $(find "${classes}" -name '*.class' | wc -l | tr -d ' ') classes to ${classes}"
+fi
+exclude_from_backup "${MAVEN_TOOLS_CACHE}/jdk-scan" 2>/dev/null || true
+
+# "java:classpath::" is required. A bare absolute path under scan.include.files
+# is silently ignored -- measured: zero types scanned, BUILD SUCCESS.
+cfg="${root}/var/scan-jdk-${jdk_version}.yml"
+mkdir -p "$(dirname "${cfg}")"
+cat > "${cfg}" <<YML
+jqassistant:
+  scan:
+    continue-on-error: true
+    include:
+      files:
+        - "java:classpath::${classes}"
+    properties:
+      maven3.dependencies.scan: false
+YML
+
+# Default target is the BASE store: a store holding nothing but this JDK,
+# kept so the scan is paid once per JDK version instead of once per night.
+# jqa-nightly copies it as the starting point of each fresh store.
+base_store="${root}/jqassistant/base-jdk-${jdk_version}"
+if [[ -n "${JQA_STORE_URI:-}" ]]; then
+  store_uri="${JQA_STORE_URI}"
+elif [[ -n "${JQA_STORE_SUFFIX:-}" ]]; then
+  store_uri="file://${root}/jqassistant/store${JQA_STORE_SUFFIX}"
+else
+  store_uri="file://${base_store}"
+  if [[ -f "${base_store}/.complete" ]]; then
+    echo "scan-jdk: base store for ${jdk_version} is present, nothing to do"
+    echo "${base_store}"
+    exit 0
+  fi
+  rm -rf "${base_store}"
+fi
+
+probe="${root}/var/scan-jdk-probe"
+mkdir -p "${probe}"
+cat > "${probe}/pom.xml" <<'XML'
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>net.aschemann.jqassistant</groupId>
+  <artifactId>scan-jdk-probe</artifactId>
+  <version>1.0</version>
+  <packaging>pom</packaging>
+</project>
+XML
+
+MVN="$(find_mvn_by_version "${JQA_MVN_VERSION:-3.9.16}")"
+[[ -x "${MVN}" ]] || MVN="$(command -v mvn)"
+echo "scan-jdk: scanning ${jdk_version} into ${store_uri}"
+( cd "${probe}" && "${MVN}" -B --no-transfer-progress -s "${SETTINGS}" \
+    -Djqassistant.maven.reuse-store=false \
+    -Djqassistant.store.uri="${store_uri}" \
+    -Djqassistant.configuration.locations="${cfg}" \
+    -Djqassistant.scan.reset=false \
+    "com.buschmais.jqassistant:jqassistant-maven-plugin:${JQA_VERSION}:scan" )
+rc=$?
+if [[ ${rc} -eq 0 && "${store_uri}" == "file://${base_store}" ]]; then
+  touch "${base_store}/.complete"
+  exclude_from_backup "${base_store}" 2>/dev/null || true
+  echo "scan-jdk: base store ready ($(du -sh "${base_store}" | cut -f1)) at ${base_store}"
+  echo "${base_store}"
+fi
+exit ${rc}

@@ -7,6 +7,9 @@ maven
 # jQAssistant stores: embedded work stores, the blue/green publication slots
 # and the writable scratch instance. All regenerable, tens of GB.
 jqassistant/store*
+# The JDK base store: scanned once per JDK version and copied into each
+# fresh store as its starting point. 338 MB, derivable from the JDK.
+jqassistant/base-jdk-*/
 jqassistant/publish/
 jqassistant/scratch/
 logs/*
