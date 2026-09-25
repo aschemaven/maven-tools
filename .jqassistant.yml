@@ -49,6 +49,17 @@ jqassistant:
       maven3.dependencies.scan: true
   analyze:
     groups:
+      # FIRST, deliberately: folds the artifact nodes that share a Maven
+      # coordinate into one. A scan creates one node per FILE, so every isolated
+      # local repository under .m2-isolated contributes a second copy of the same
+      # Central artifact -- and the class-level content sits on only one of them.
+      # The report groups below count usage per artifact, so they have to see the
+      # folded graph, not the duplicated one. Measured: jQAssistant does execute
+      # the groups in the order configured here. It is not guaranteed anywhere,
+      # though, and the report concepts do not declare a requiresConcept on
+      # maven:SingleArtifactPerCoordinate -- so this ordering is observed
+      # behaviour, not an invariant.
+      - maven-artifact-identity
       - default
       # Wires each artifact's placeholder types into the scanned JDK's
       # hierarchy; without it EXTENDS* stops at the JDK boundary.

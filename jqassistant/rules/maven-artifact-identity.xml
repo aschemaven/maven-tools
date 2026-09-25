@@ -1,0 +1,101 @@
+<jqassistant-rules xmlns="http://schema.jqassistant.org/rule/v2.2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://schema.jqassistant.org/rule/v2.2 https://jqassistant.github.io/jqassistant/current/schema/jqassistant-rule-v2.2.xsd">
+
+    <!--
+      jQAssistant identifies a :Maven:Artifact by the FILE it scanned, not by the
+      Maven coordinate. Wherever the same coordinate is resolved out of more than
+      one local repository, the graph therefore carries more than one node for it.
+
+      This corpus has seven isolated local repositories under .m2-isolated (see
+      isolated-m2-projects.txt and lrm-split-skip-projects.txt). mvnd, the Maven
+      3.x integration tests, resolver and the build-cache extension fork Maven
+      processes that ignore MAVEN_OPTS, so each of them builds against its own
+      repository. Every Central artifact those builds touch exists a second time
+      on disk, and thus a second time in the graph.
+
+      Measured on the published store of 2026-09-22: 11206 artifact nodes for
+      9877 coordinates. 711 coordinates had more than one node, 2040 nodes in
+      total, 1416 of them out of .m2-isolated, worst case seven nodes for one
+      coordinate. Not one of those 2040 duplicates was a project's own artifact;
+      all of them were resolved dependencies.
+
+      Why that is not merely untidy: the class-level content lands on ONE of the
+      copies. org.apache.maven:maven-model-builder:jar:4.0.0-rc-6 had 149 types
+      on the copy in the shared .m2 and zero on the two copies under
+      .m2-isolated. A query that lands on one of those sees an artifact that uses
+      nothing, and reports every dependency of it as unused.
+
+      WHY MERGE AND NOT EXCLUDE
+      Not scanning the isolated repositories would be the cheaper fix and was
+      measured first. It costs too much. 1034 DEPENDS_ON edges leave the isolated
+      projects' own artifacts, and those edges are precisely how the graph
+      answers "what does mvnd use". Dropping the dependency scan deletes them
+      instead of repairing them, and it would additionally remove 13255 types
+      that exist only in plexus/components/compiler's isolated repository
+      (aspectj, error-prone, ecj, protobuf), because no shared-repository build
+      ever resolves them. Merging keeps every edge AND moves it onto the copy
+      that carries the classes, which is the answer the question wanted in the
+      first place.
+    -->
+    <group id="maven-artifact-identity">
+        <includeConcept refId="maven:SingleArtifactPerCoordinate"/>
+        <includeConstraint refId="maven:ArtifactCoordinateIsUnique"/>
+    </group>
+
+    <concept id="maven:SingleArtifactPerCoordinate">
+        <description>Folds the artifact nodes that share a Maven coordinate into a single node, keeping the copy that carries the classes and redirecting every relationship of the others onto it.</description>
+        <cypher><![CDATA[
+CALL {
+  MATCH (a:Maven:Artifact)
+  WITH a.fqn AS coordinate, collect(a) AS nodes
+  WHERE size(nodes) > 1
+  CALL {
+    // Rank the copies: the one with the most types wins, because that is the
+    // one the class-level scan reached. Ties go to the shared .m2 over an
+    // isolated repository, then to the lexicographically first path, so the
+    // outcome does not depend on the order the projects were scanned in.
+    WITH nodes
+    UNWIND nodes AS n
+    OPTIONAL MATCH (n)-[:CONTAINS]->(t:Type)
+    WITH n, count(t) AS types
+    ORDER BY types DESC,
+             CASE WHEN n.fileName CONTAINS '.m2-isolated' THEN 1 ELSE 0 END ASC,
+             n.fileName ASC
+    RETURN collect(n) AS ranked
+  }
+  // 'discard' keeps the properties of the first node in the list, i.e. of the
+  // winner.
+  //
+  // mergeRels MUST stay false. It would fold parallel relationships of the same
+  // type between the same two nodes into one and resolve conflicting properties
+  // by the same 'discard' policy, and :DEPENDS_ON between two artifacts is
+  // already multi-valued in this graph, independently of any duplication: the
+  // same edge is recorded once per resolving reactor module, with the scope that
+  // module saw. Measured on the store of 2026-09-22: 2002 coordinate pairs carry
+  // several edges, 1967 of them with differing scopes (for example
+  // org.apache.maven:maven-plugin-api:3.8.6 to maven-model:3.8.6 as both
+  // 'compile' and 'provided'). Folding would silently pick one of them.
+  // With mergeRels false every relationship is re-pointed and nothing is lost.
+  // No copy of a coordinate has a relationship to its own twin (verified), so
+  // the merge cannot produce self-loops either.
+  CALL apoc.refactor.mergeNodes(ranked, {properties: 'discard', mergeRels: false}) YIELD node
+  RETURN count(node) AS mergedCoordinates
+}
+RETURN mergedCoordinates
+        ]]></cypher>
+    </concept>
+
+    <constraint id="maven:ArtifactCoordinateIsUnique" severity="major">
+        <requiresConcept refId="maven:SingleArtifactPerCoordinate"/>
+        <description>No Maven coordinate may be represented by more than one artifact node. Guards the concept above: a coordinate that still has several nodes means the merge did not reach it.</description>
+        <cypher><![CDATA[
+MATCH (a:Maven:Artifact)
+WITH a.fqn AS coordinate, count(a) AS nodes, collect(a.fileName) AS files
+WHERE nodes > 1
+RETURN coordinate, nodes, files
+ORDER BY nodes DESC, coordinate
+        ]]></cypher>
+    </constraint>
+
+</jqassistant-rules>

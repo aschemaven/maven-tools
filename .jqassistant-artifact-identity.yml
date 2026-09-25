@@ -1,0 +1,14 @@
+# Overlay that runs ONLY the artifact-identity group.
+#
+# Layered on top of .jqassistant.yml and therefore listed FIRST:
+# jQAssistant merges jqassistant.configuration.locations with FIRST-WINS
+# semantics (verified with jqassistant:effective-configuration -- listing an
+# overlay last leaves the base value in place).
+#
+# Used to apply maven:SingleArtifactPerCoordinate to a store without also
+# running the report and GitHub rule groups, which need parts of the graph a
+# scan-only run does not have.
+jqassistant:
+  analyze:
+    groups:
+      - maven-artifact-identity
