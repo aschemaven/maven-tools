@@ -289,3 +289,37 @@ jqa-cycle-260923-004526-49697	2026-09-23 01:23:46	github	api_walks	17
 jqa-cycle-260923-004526-49697	2026-09-23 01:23:46	github	coverage_warnings	10
 jqa-cycle-260923-004526-49697	2026-09-23 01:23:46	cycle	store_kib	5190484
 jqa-cycle-260923-012349-52040	2026-09-23 01:24:41	cycle	store_kib	5190484
+jqa-cycle-260925-102448-57010	2026-09-25 11:06:34	build	projects_done	88
+jqa-cycle-260925-102448-57010	2026-09-25 11:06:34	build	projects_failed	41
+jqa-cycle-260925-102448-57010	2026-09-25 11:06:34	build	projects_total	90
+jqa-cycle-260925-110638-80034		scan	projects_done	15
+jqa-cycle-260925-110638-80034		scan	projects_failed	0
+0
+jqa-cycle-260925-110638-80034		scan	projects_total	125
+jqa-cycle-260925-112809-93301	2026-09-25 12:18:48	build	projects_done	118
+jqa-cycle-260925-112809-93301	2026-09-25 12:18:48	build	projects_failed	3
+jqa-cycle-260925-112809-93301	2026-09-25 12:18:48	build	projects_total	125
+jqa-cycle-260925-112809-93301	2026-09-25 12:18:48	cycle	store_kib	5006164
+jqa-cycle-260925-121852-28552	2026-09-26 09:33:03	scan	projects_done	118
+jqa-cycle-260925-121852-28552	2026-09-26 09:33:03	scan	projects_failed	0
+0
+jqa-cycle-260925-121852-28552	2026-09-26 09:33:03	scan	projects_total	125
+jqa-cycle-260925-121852-28552	2026-09-26 09:33:03	cycle	store_kib	5006164
+jqa-cycle-260926-093307-52918		github	repos_scanned	90
+jqa-cycle-260926-093307-52918		github	api_walks	71
+jqa-cycle-260926-093307-52918		github	coverage_warnings	61
+jqa-cycle-260926-093307-52918		cycle	store_kib	5006164
+jqa-cycle-260926-110004-86838	2026-09-26 11:44:18	build	projects_done	118
+jqa-cycle-260926-110004-86838	2026-09-26 11:44:18	build	projects_failed	3
+jqa-cycle-260926-110004-86838	2026-09-26 11:44:18	build	projects_total	125
+jqa-cycle-260926-110004-86838	2026-09-26 11:44:18	cycle	store_kib	4969616
+jqa-cycle-260926-114422-10921	2026-09-26 12:32:59	scan	projects_done	118
+jqa-cycle-260926-114422-10921	2026-09-26 12:32:59	scan	projects_failed	0
+0
+jqa-cycle-260926-114422-10921	2026-09-26 12:32:59	scan	projects_total	125
+jqa-cycle-260926-114422-10921	2026-09-26 12:32:59	cycle	store_kib	4969616
+jqa-cycle-260926-123303-20717	2026-09-26 13:12:37	github	repos_scanned	112
+jqa-cycle-260926-123303-20717	2026-09-26 13:12:37	github	api_walks	8
+jqa-cycle-260926-123303-20717	2026-09-26 13:12:37	github	coverage_warnings	4
+jqa-cycle-260926-123303-20717	2026-09-26 13:12:37	cycle	store_kib	4969616
+jqa-cycle-260926-131241-23738	2026-09-26 13:13:42	cycle	store_kib	4969616
