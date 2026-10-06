@@ -172,7 +172,7 @@ trap 'rm -rf "${lock}"' EXIT
 
 # --- notification ---------------------------------------------------------
 notify_failure() {
-  local stage="$1" logdir="$2"
+  local stage="$1" logdir="$2" errlog="${3-}"
   local title="jQA nightly FAILED: ${stage}"
   local msg="host $(hostname -s), see ${logdir}"
   # The mail goes FIRST. A desktop notification can block forever when no
@@ -181,9 +181,22 @@ notify_failure() {
   # first failed stage and the mail that was supposed to report it was never
   # sent. The notifier is a convenience; the mail is the actual channel.
   if [[ -n "${NIGHTLY_MAIL}" ]] && command -v mail >/dev/null 2>&1; then
-    printf 'Stage: %s\nHost: %s\nLogs: %s\nTime: %s\n' \
-      "${stage}" "$(hostname -s)" "${logdir}" "$(stamp)" \
-      | mail -s "${title}" "${NIGHTLY_MAIL}" 2>/dev/null || true
+    # Carry the actual error. A mail with nothing but the stage name cost six
+    # days once: the cause ("cannot connect to the Docker daemon") sat in the
+    # log the whole time while the mails said only "FAILED: publish".
+    {
+      printf 'Stage: %s\nHost: %s\nLogs: %s\nTime: %s\n' \
+        "${stage}" "$(hostname -s)" "${logdir}" "$(stamp)"
+      local src=""
+      [[ -n "${errlog}" && -f "${errlog}" ]] && src="${errlog}"
+      [[ -z "${src}" && -d "${logdir}" ]] && src=$(ls -1t "${logdir}"/*.log 2>/dev/null | head -1)
+      if [[ -n "${src}" && -f "${src}" ]]; then
+        printf '\n--- last lines of %s ---\n' "$(basename "${src}")"
+        tail -25 "${src}" 2>/dev/null | cut -c1-300
+      else
+        printf '\n(no log file found to quote)\n'
+      fi
+    } | mail -s "${title}" "${NIGHTLY_MAIL}" 2>/dev/null || true
   fi
   # Detached: "|| true" catches a failure, never a hang.
   if command -v terminal-notifier >/dev/null 2>&1; then
@@ -194,15 +207,49 @@ notify_failure() {
 }
 
 finish() {
-  local result="$1" stage="$2" logdir="$3"
+  local result="$1" stage="$2" logdir="$3" errlog="${4-}"
   printf '%s\t%s\t%s\t%s\n' "$(stamp)" "${result}" "${stage}" "${logdir}" > "${status_file}"
   if [[ "${result}" != "OK" ]]; then
-    notify_failure "${stage}" "${logdir}"
+    notify_failure "${stage}" "${logdir}" "${errlog}"
     echo "[$(stamp)] FAILED at ${stage}; logs: ${logdir}" >&2
     exit 1
   fi
   echo "[$(stamp)] OK (${stage}); logs: ${logdir}"
 }
+
+# --- 0a. Docker ------------------------------------------------------------
+# Only the publish stage needs Docker, but it is the LAST stage: a Docker that
+# is down costs a full build before anyone finds out. Measured on godestorm,
+# where Docker Desktop had been quit: six consecutive nights built a graph for
+# twelve hours each and then failed to publish it.
+#
+# Docker Desktop on macOS is a GUI application, not a daemon -- it does not
+# come back on its own, and launchd cannot start it as a service. Asking the
+# logged-in session to open it works and is cheap.
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 || {
+    echo "[$(stamp)] no docker command; publish will not work" >&2; return 1; }
+  docker info >/dev/null 2>&1 && return 0
+  [[ "$(uname -s)" == "Darwin" && -d /Applications/Docker.app ]] || {
+    echo "[$(stamp)] docker unreachable and cannot be started here" >&2; return 1; }
+  echo "[$(stamp)] docker unreachable; starting Docker Desktop"
+  open -a Docker >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 "${DOCKER_WAIT_TRIES:-36}"); do
+    sleep 5
+    if docker info >/dev/null 2>&1; then
+      echo "[$(stamp)] docker up after ~$((i * 5))s"
+      return 0
+    fi
+  done
+  echo "[$(stamp)] docker still unreachable after $((${DOCKER_WAIT_TRIES:-36} * 5))s" >&2
+  return 1
+}
+if [[ "${PUBLISH:-true}" == "true" ]] && ! ensure_docker; then
+  # Not fatal: the graph is still worth building and can be published later
+  # by hand. But say so now, not in twelve hours.
+  echo "[$(stamp)] continuing without Docker; the publish stage will fail" >&2
+fi
 
 # --- 0. manifest sync -----------------------------------------------------
 # The project list is not ours: apache/maven-sources adds, renames and retires
@@ -268,7 +315,10 @@ sync_manifest() {
 #
 # No "head -n -N" here: that is a GNU extension and this runs on BSD head.
 prune_stores() {
-  local keep="${JQA_STORE_KEEP:-2}" dir="${root}/jqassistant"
+  # KEEP_STORES, not a second undocumented JQA_STORE_KEEP: the latter
+  # defaulted to 2 while the documented KEEP_STORES says 3, so the
+  # setting an operator reads about had no effect here.
+  local keep="${KEEP_STORES:-3}" dir="${root}/jqassistant"
   local -a stores=()
   local s
   while IFS= read -r s; do
@@ -523,15 +573,26 @@ run_stage analyze || finish FAILED analyze "${logdir}"
 # --- 4. publish -----------------------------------------------------------
 # stage -> verify -> switch. Only the switch makes the new state visible; if a
 # step fails, the previous version stays online unchanged.
-if [[ "${PUBLISH:-true}" == "true" ]]; then
-  ./bin/jqa-publish run "${store_dir}" || finish FAILED publish "${logdir}"
-  prune_stores
-fi
+# Prune BEFORE publishing, not after. "finish" exits the script, so a failed
+# publish skipped every cleanup below it -- including a second loop here that
+# had been written to be independent of publication and was simply unreachable.
+# Measured on godestorm: six nights of 3.5 GB stores accumulated to eight
+# stores and filled the volume to 99%, at which point publish would have
+# failed for a second, unrelated reason.
+#
+# Safe in this order because the dated stores are not what is being served:
+# jqa-publish holds its own copies in the blue/green slots, and prune_stores
+# never touches the store this run just wrote.
+prune_stores
 
-if [[ "${rebuild}" == "true" ]]; then
-  ls -1dt jqassistant/store-20* 2>/dev/null | tail -n +$((KEEP_STORES + 1)) | while read -r old; do
-    echo "[$(stamp)] removing old store ${old}"; rm -rf "${old}"
-  done
+if [[ "${PUBLISH:-true}" == "true" ]]; then
+  # Keep the output: jqa-publish writes its diagnosis to stdout/stderr, which
+  # does not land in the stage log directory, so the failure mail had nothing
+  # to quote.
+  publish_log="${root}/logs/publish-$(date '+%y%m%d-%H%M%S').log"
+  if ! ./bin/jqa-publish run "${store_dir}" 2>&1 | tee "${publish_log}"; then
+    finish FAILED publish "${logdir}" "${publish_log}"
+  fi
 fi
 
 # --- 5. verify coverage against the GitHub API ----------------------------
