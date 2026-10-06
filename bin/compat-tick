@@ -85,8 +85,22 @@ in_nightly_window() {
     [[ "${hr}" -ge "${NIGHTLY_START}" || "${hr}" -lt "${NIGHTLY_END}" ]]
   fi
 }
+# The jQAssistant nightly and a matrix build are both all-core, all-disk jobs.
+# Nothing coordinated them: on godestorm the nightly occupies 03:00 to roughly
+# 15:00, which swallows the whole default build window, and a "runner" would
+# start on top of it every hour. Yield to the nightly whatever the role says --
+# it holds a lock directory for exactly as long as it runs, so this needs no
+# second source of truth. FORCE_BUILD still wins, for a deliberate manual run.
+nightly_running() {
+  [[ -d "${root}/.jqa-nightly.lock" ]]
+}
+
 should_build() {
   if ${FORCE_BUILD}; then return 0; fi
+  if nightly_running; then
+    echo "compat-tick: jqa-nightly is running; skipping the build"
+    return 1
+  fi
   if [[ "${role}" == "runner" ]]; then return 0; fi
   if in_nightly_window && [[ "$(mac_idle_seconds)" -ge "${IDLE_MIN_SECONDS}" ]]; then
     return 0
