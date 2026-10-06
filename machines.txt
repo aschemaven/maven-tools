@@ -16,3 +16,7 @@
 godecane          controller
 # intel-macbook   runner
 # linux-laptop    runner
+# Builds in its own window (see the launchd plist there): the jQAssistant
+# nightly runs 03:00 to about 15:00 on this machine, so the matrix window
+# is shifted out of its way and compat-tick yields to the nightly lock.
+godestorm         controller
