@@ -38,21 +38,39 @@ printf 'jQA Nightly  %s  %s\n' "${host}" "$(date '+%F %H:%M')"
 printf 'Outcome: %s\n' "${outcome:-unknown}"
 
 # --- stages ---------------------------------------------------------------
-if [[ -n "${cycle}" && -r "${cycle}/timing.txt" ]]; then
+# A nightly run is FOUR cycles, one per stage, each with its own log dir and
+# its own run id. Reading "the latest cycle" therefore showed only analyze.
+# Take the most recent row per stage out of the history instead -- that is
+# what a reader wants to see, and it does not depend on how the run was
+# chopped into cycles.
+hist="${root}/metrics/jqa-timings.tsv"
+if [[ -r "${hist}" ]]; then
   printf '\n== Stages ==\n'
-  awk '/^\[.*END  *[a-z]+ /{
-         for (i=1;i<=NF;i++) {
-           if ($i=="END") stage=$(i+1);
-           if ($i ~ /^rc=/) rc=substr($i,4);
-           if ($i ~ /^elapsed=/) el=substr($i,9);
-         }
-         printf "  %-10s %-9s rc=%s\n", stage, el, rc
-       }' "${cycle}/timing.txt"
+  awk -F'\t' -v host="${host}" '
+    NR == 1 || $6 != host { next }
+    { if ($2 > seen[$3]) { seen[$3] = $2; sec[$3] = $4; rc[$3] = $5 } }
+    END {
+      split("build scan github analyze", st, " ")
+      total = 0
+      for (k = 1; k <= 4; k++) {
+        g = st[k]
+        if (!(g in sec)) continue
+        total += sec[g]
+        printf "  %-9s %9s  rc=%s   %s\n", g, hms(sec[g]), rc[g], seen[g]
+      }
+      if (total > 0) printf "  %-9s %9s\n", "total", hms(total)
+    }
+    function hms(x,  h, m) {
+      h = int(x / 3600); m = int((x % 3600) / 60)
+      return (h > 0) ? sprintf("%dh%02dm", h, m) : sprintf("%dm%02ds", m, x % 60)
+    }
+  ' "${hist}"
+fi
+if [[ -n "${cycle}" && -r "${cycle}/timing.txt" ]]; then
   mvnv=$(awk -F= '/^mvn=/{sub(/^mvn=/,""); print; exit}' "${cycle}/timing.txt")
-  [[ -n "${mvnv}" ]] && printf '  maven:     %s\n' "${mvnv}"
+  [[ -n "${mvnv}" ]] && printf '  maven:    %s\n' "${mvnv}"
 fi
 
-# --- repositories ---------------------------------------------------------
 # jqa-nightly records the moves with their SHAs at detection time, because it
 # overwrites the previous HEADs just before it ends -- diffing the two files
 # here would therefore show nothing. Fall back to that diff anyway for a
@@ -140,69 +158,78 @@ else
   printf '  its window and never while this nightly holds its lock.\n'
 fi
 
-# --- timings: this run against its own history ----------------------------
-# jqa-timings already keeps an append-only series per stage; jqa-nightly
-# collects into it just before the run ends, so by the time this runs the
-# current rows are present on the success path. Compare against the median of
-# the preceding runs ON THIS HOST -- the two machines differ enough in cores
-# and disk that a shared median would flag normal behaviour as a regression.
-hist="${root}/metrics/jqa-timings.tsv"
+# --- timings: latest per stage, against a ROLLING window -----------------
+# A rolling window and not the whole history, and the raw values alongside the
+# median. Measured on godestorm: the scan sat at 9 to 10 hours for twelve
+# consecutive days and then dropped to 2.2 once the volume was freed. Against
+# an all-history median that regime change would be reported as "-78%" for
+# weeks after it became the normal case; a window of ten lets it work itself
+# in within about five runs.
+#
+# The raw values are printed because they make an outlier self-explanatory.
+# Removing outliers would be worse: the 12-hour night and the 21-hour scan on
+# godecane are the evidence that disk pressure costs a factor of six. They
+# stay in the data; the window decides what counts as "usual".
+: "${TIMING_WINDOW:=10}"
 if [[ -r "${hist}" ]]; then
-  printf '\n== Timings ==\n'
-  awk -F'\t' -v host="${host}" '
-    NR == 1 { next }
-    $6 != host || $5 != 0 { next }
-    { rows[++n] = $1 "\t" $2 "\t" $3 "\t" $4
-      if ($1 > latest) latest = $1 }
+  printf '\n== Timings vs the last %s runs ==\n' "${TIMING_WINDOW}"
+  awk -F'\t' -v host="${host}" -v win="${TIMING_WINDOW}" '
+    NR == 1 || $6 != host || $5 != 0 { next }
+    { key = $3; n[key]++; ts[key, n[key]] = $2; sec[key, n[key]] = $4 }
     END {
-      # Collect per stage: the latest run id separately, everything else as
-      # history for the median.
-      for (i = 1; i <= n; i++) {
-        split(rows[i], f, "\t")
-        if (f[1] == latest) cur[f[3]] = f[4]
-        else                hist[f[3]] = hist[f[3]] " " f[4]
-      }
-      order = "build scan github analyze"
-      split(order, st, " ")
-      printf "  stage      this run   median    delta\n"
-      total = 0
+      split("build scan github analyze", st, " ")
+      printf "  stage      latest    median    delta   recent\n"
       for (k = 1; k <= 4; k++) {
-        stage = st[k]
-        if (!(stage in cur)) continue
-        total += cur[stage]
-        m = median(hist[stage])
-        d = (m > 0) ? sprintf("%+d%%", (cur[stage] - m) * 100 / m) : "n/a"
-        flag = (m > 0 && cur[stage] > 1.5 * m) ? "  <- slower" : ""
-        printf "  %-9s %9s %9s %8s%s\n", stage, hms(cur[stage]), (m > 0 ? hms(m) : "-"), d, flag
+        g = st[k]
+        if (!(g in n)) continue
+        # Rows arrive in append order, so the tail is the most recent window.
+        lo = n[g] - win + 1; if (lo < 1) lo = 1
+        cnt = 0
+        for (i = n[g]; i >= lo; i--) { cnt++; w[cnt] = sec[g, i] }
+        cur = w[1]
+        # Median of the window EXCLUDING the latest value, so "latest" is
+        # compared against its history rather than against itself.
+        c = 0
+        for (i = 2; i <= cnt; i++) { c++; h[c] = w[i] }
+        m = median(h, c)
+        d = (m > 0) ? sprintf("%+d%%", (cur - m) * 100 / m) : "n/a"
+        flag = (m > 0 && cur > 1.5 * m) ? " <-" : ""
+        recent = ""
+        for (i = 1; i <= cnt && i <= 5; i++) recent = recent " " short(w[i])
+        printf "  %-9s %8s %9s %8s%s %s\n", g, hms(cur), (m > 0 ? hms(m) : "-"), d, flag, recent
+        delete w; delete h
       }
-      if (total > 0) printf "  %-9s %9s\n", "total", hms(total)
     }
-    function hms(sec,  h, m) {
-      h = int(sec / 3600); m = int((sec % 3600) / 60)
-      return (h > 0) ? sprintf("%dh%02dm", h, m) : sprintf("%dm", m)
+    function hms(x,  h2, m2) {
+      h2 = int(x / 3600); m2 = int((x % 3600) / 60)
+      return (h2 > 0) ? sprintf("%dh%02dm", h2, m2) : sprintf("%dm", m2)
     }
-    function median(list,  a, c, i, tmp, j) {
-      c = split(list, a, " ")
+    function short(x) {
+      return (x >= 3600) ? sprintf("%.1fh", x / 3600) : sprintf("%dm", int(x / 60))
+    }
+    function median(a, c,  i, j, tmp) {
       if (c == 0) return 0
       for (i = 1; i < c; i++) for (j = i + 1; j <= c; j++)
         if (a[j] + 0 < a[i] + 0) { tmp = a[i]; a[i] = a[j]; a[j] = tmp }
-      return (c % 2) ? a[(c + 1) / 2] + 0 : int((a[c/2] + a[c/2 + 1]) / 2)
+      return (c % 2) ? a[(c + 1) / 2] + 0 : int((a[int(c/2)] + a[int(c/2) + 1]) / 2)
     }
   ' "${hist}"
 
-  # The scan is the long pole, so name what inside it took the time.
   pt="${root}/metrics/project-timings.tsv"
   if [[ -r "${pt}" ]]; then
     printf '\n  slowest projects recorded most recently:\n'
     tail -400 "${pt}" | awk -F'\t' '$4+0 > 0 { printf "%s\t%s\n", $4, $3 }' \
-      | sort -rn | head -5 \
+      | sort -rn | awk -F'\t' '!seen[$2]++' | head -5 \
       | awk -F'\t' '{ printf "    %-44s %dm%02ds\n", $2, int($1/60), $1%60 }'
   fi
 fi
 
 # --- graph and disk -------------------------------------------------------
 printf '\n== Graph ==\n'
-nodes=$(grep -oE 'slot [a-z]+ verified: [0-9]+ nodes' "${root}/logs/jqa-nightly.out.log" 2>/dev/null | tail -1)
+# The scheduled run logs to jqa-nightly.out.log, a hand-started one to its own
+# file; take whichever was written last so the figure belongs to this run.
+newest_log=$(ls -1t "${root}"/logs/jqa-nightly.out.log "${root}"/logs/nightly-*.log 2>/dev/null | head -1)
+nodes=$(grep -oE 'slot [a-z]+ verified: [0-9]+ nodes' "${newest_log:-/dev/null}" 2>/dev/null | tail -1)
 [[ -n "${nodes}" ]] && printf '  %s\n' "${nodes}"
 slot=$(readlink "${root}/jqassistant/publish/current" 2>/dev/null | sed 's#.*/##')
 [[ -n "${slot}" ]] && printf '  serving slot: %s\n' "${slot}"
