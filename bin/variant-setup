@@ -100,9 +100,9 @@ for name in "${variants[@]}"; do
     mvn_note="maven (already present, kept)"
   else
     if [[ -n "${branch}" ]]; then
-      mvn_note="NO maven: branch '${branch}' distro must be built into ${v_root}/maven (prepare step, TODO)"
+      mvn_note="NO maven: branch '${branch}' distro must be built into ${v_root}/maven; cells will be SKIPPED until then"
     else
-      mvn_note="NO maven: version ${version} not installed in SDKman; build/install it or it will fall back to system mvn"
+      mvn_note="NO maven: version ${version} not in SDKman and no local build; cells for this variant will be SKIPPED"
     fi
   fi
 

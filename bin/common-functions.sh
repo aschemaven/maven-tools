@@ -694,8 +694,17 @@ exec_mvn() {
     # mvnw wrapper (the whole point is testing a chosen Maven version).
     mvn="$(variant_mvn "${variant}")"
     if [[ -z "${mvn}" ]]; then
-      echo "WARNING: variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_field "${variant}" 2)); using system mvn" >&2
-      mvn="mvn"
+      # Do NOT fall back to the system Maven. A variant IS a Maven version, so
+      # running the cell with some other one produces a result labelled with a
+      # version it never used -- a wrong number, which is worse than a missing
+      # one. Observed on godestorm on 2026-10-07: three of eight columns ran
+      # against the system Maven for a whole matrix pass and reported cells as
+      # dpv-40, dpv-41 and m4-rc6 regardless.
+      #
+      # Skipping leaves the cell empty, which the matrix renders as "no result
+      # yet" -- honest, and visible.
+      echo "SKIP variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_field "${variant}" 2))" >&2
+      return 2
     fi
     mvn_info="variant ${variant} (Maven $(variant_field "${variant}" 2))"
     [[ -n "${v_javahome}" ]] && mvn_info="${mvn_info}, JDK $(variant_jdk "${variant}")"

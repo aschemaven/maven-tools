@@ -103,7 +103,23 @@ build_component_row() {
     i=$((i + 1))
     tmp=$(mktemp)
     # Per-call VARIANT (no global export) so parallel rows do not clobber it.
-    VARIANT="${variant}" exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1
+    # "|| rc=$?" and not a bare call: this runs under errexit, so a non-zero
+    # exec_mvn would kill the whole matrix before the next line could look at
+    # the code. Measured the hard way -- the run ended silently after the
+    # header, without even the closing "Matrix complete".
+    rc=0
+    VARIANT="${variant}" exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1 || rc=$?
+
+    # rc=2 means exec_mvn refused to run: the variant has no Maven of its own
+    # and must not borrow the system one. Nothing was executed, so there is no
+    # new log -- and "ls -t | head -1" would happily pick up the log of an
+    # EARLIER run and report that stale result as today's. Drop the cell
+    # instead; an absent cell renders as "no result yet", which is the truth.
+    if [[ "${rc}" -eq 2 ]]; then
+      cat "${tmp}"
+      rm -f "${tmp}" "${v_root}/cells/${MATRIX_NS:+${MATRIX_NS}/}${project}.json"
+      continue
+    fi
 
     cell_log=$(ls -t "${v_root}/logs/${project}"/*.log 2>/dev/null | head -1 || true)
     result=$(classify_log "${cell_log}")
