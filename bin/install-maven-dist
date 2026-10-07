@@ -124,8 +124,14 @@ while read -r version project rest; do
     ln -sfn "${dist}" "${target}"
   fi
 
-  if out=$("${target}/bin/mvn" -v 2>&1 | head -1); then
-    echo "[$(stamp)] ${version}: ${out}"
+  # Capture first, slice afterwards: "| head -1" closes the pipe after the
+  # first line, Maven takes SIGPIPE and pipefail turns that into a failure.
+  # Whether it fires depends on how fast Maven writes the rest, which is why
+  # one distribution reported fine and the next "installed but 'mvn -v'
+  # failed" while the binary was perfectly good. Same defect as the one fixed
+  # in install-launchd (grep -q SIGPIPEing launchctl).
+  if out=$("${target}/bin/mvn" -v 2>&1); then
+    echo "[$(stamp)] ${version}: ${out%%$'\n'*}"
   else
     echo "[$(stamp)] ${version}: installed but 'mvn -v' failed" >&2
     rc=1
