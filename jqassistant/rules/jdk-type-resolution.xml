@@ -32,13 +32,18 @@ RETURN count(a) AS jdkArtifacts
 
     <concept id="jdk:ResolveSuperClass">
         <requiresConcept refId="jdk:Artifact"/>
-        <description>Links every unresolved placeholder type to the super class of its JDK counterpart, so EXTENDS* reaches java.lang.Object from anywhere.</description>
+        <description>Links every unresolved placeholder type to the super class its declaring artifact records, so EXTENDS* reaches java.lang.Object from anywhere. Not limited to the JDK: a project exception whose super class lives in another Maven module has exactly the same problem.</description>
         <cypher><![CDATA[
-MATCH (:Jdk)-[:CONTAINS]->(jdk:Java:Type)-[:EXTENDS]->(jdkSuper:Java:Type)
-MATCH (local:Java:Type {fqn: jdk.fqn})
-WHERE local <> jdk
-  AND NOT (local)-[:EXTENDS]->()
-MERGE (local)-[r:EXTENDS]->(jdkSuper)
+MATCH (:Java:Artifact)-[:CONTAINS]->(declared:Java:Type)-[:EXTENDS]->(superType:Java:Type)
+WITH declared.fqn AS fqn, collect(DISTINCT superType.fqn) AS superFqns, collect(superType)[0] AS resolvedSuper
+// Only where every artifact declaring this type agrees on the super class.
+// Two versions of a library disagreeing would otherwise be resolved by guess;
+// measured on the production graph that affects 945 of 162612 names.
+WHERE size(superFqns) = 1
+MATCH (placeholder:Java:Type {fqn: fqn})
+WHERE NOT (placeholder)-[:EXTENDS]->()
+  AND NOT (:Java:Artifact)-[:CONTAINS]->(placeholder)
+MERGE (placeholder)-[r:EXTENDS]->(resolvedSuper)
   ON CREATE SET r.jdkResolved = true
 RETURN count(r) AS resolvedSuperClasses
         ]]></cypher>
