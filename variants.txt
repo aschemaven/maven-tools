@@ -27,34 +27,33 @@
 
 # --- stable variants (build-free: binary is a symlink to an installed SDKman
 #     Maven, so these are usable immediately) ---------------------------------
-# Keep these at the LATEST patch of each line (bump as new releases land;
-# a future 3.10.x line would get its own variant row).
+# Keep these at the LATEST patch of each line (bump as new releases land).
 m3-9           3.9.16           21   -
-m4-rc5         4.0.0-rc-5       21   -
+# 3.10.0 is released but not yet SDKman's 3.x default, so it needs its own row
+# rather than riding along on m3-9.
+m3-10          3.10.0           21   -
+m4-rc7         4.0.0-rc-7       21   -
 
-# --- locally-built SNAPSHOT distros (need a `prepare` build first; the binary
-#     is built from the branch into variants/<name>/maven) ---------------------
-# m4-snapshot  4.0.0-SNAPSHOT   21   -
-
-# --- 4.x-native lines (Deliverable 3): carry a branch -> worktree -------------
-# m4-native-jar  <pinned>       21   master
-
-# --- default-plugin-version refresh spike (temporary; see maven-bugfixing
-#     in-progress/maven-core-default-plugin-version-refresh.adoc) -------------
-# Locally built distributions carrying the bumped lifecycle plugin defaults
-# (latest stable 3.x). The binary is a symlink into the spike's dist dir, so
-# variant-setup keeps it ("already present").
-dpv-39         3.9.17-SNAPSHOT  21   -
-dpv-310        3.10.0-SNAPSHOT  21   -
-dpv-40         4.0.0-SNAPSHOT   21   -
-dpv-41         4.1.0-SNAPSHOT   21   -
-# Stock 4.0.0-rc-6 (released, unbumped defaults) -- control column for the
-# default-plugin-version spike: distinguishes "our bump broke it" from
-# "Maven 4 breaks it anyway".
-m4-rc6         4.0.0-rc-6       21   -
-
-# --- plain 4.0.x line (next RC candidate) ------------------------------------
-# The distribution is materialised from the nightly build by install-maven-dist;
-# see maven-dists.txt for why the candidate is named after the branch and not
-# after the 4.0.0-SNAPSHOT the build reports.
+# --- SNAPSHOT lines, materialised from the nightly build ----------------------
+# install-maven-dist unpacks these from the distribution archives the pipeline
+# produces anyway; see maven-dists.txt.
 m4-40x         4.0.x-SNAPSHOT   21   -
+m4-41x         4.1.0-SNAPSHOT   21   -
+
+# --- removed 2026-10-07 -------------------------------------------------------
+# The default-plugin-version refresh spike had five columns here: dpv-39,
+# dpv-310, dpv-40, dpv-41 (distributions carrying bumped lifecycle plugin
+# defaults) and m4-rc6 as the unbumped control that told "our bump broke it"
+# apart from "Maven 4 breaks it anyway".
+#
+# The spike is done. Its 4.x half was closed on 2026-09-17, superseded by
+# gnodet's apache/maven#13166 which automates the bump; its 3.10 half waits on
+# apache-40 / maven-parent-50, where a parent bump resolves the drift without
+# a column of ours. Validation had already passed on all four lines.
+#
+# They are gone rather than commented out: five of eight columns cost matrix
+# time every night for a question that is answered, and the history has them
+# if the parent landing turns up a surprise.
+#
+# m4-rc5 went at the same time -- the stable rows track the latest patch of
+# each line, and that is rc-7 now.
