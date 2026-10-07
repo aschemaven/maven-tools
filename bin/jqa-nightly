@@ -462,8 +462,33 @@ awk -F'\t' -v prevf="${prev}" '
 echo "[$(stamp)] changed repositories: ${n_changed}"
 [[ "${n_changed}" -gt 0 && "${n_changed}" -le 15 ]] && echo "    ${changed}"
 
+# A weekly full build, whether or not anything moved upstream. Building only
+# what changed is right for the graph, but it never re-exercises the other
+# ~90 projects, so a regression that comes from the TOOLS or the ENVIRONMENT
+# -- a new Maven, a JDK patch, a plugin resolving differently -- stays
+# invisible until the day that project happens to move on its own. One full
+# pass a week puts a floor under that.
+full_marker="${state_dir}/last-full-build"
+: "${FULL_BUILD_DAYS:=7}"
+if [[ "${force}" != "true" && "${FULL_BUILD_DAYS}" -gt 0 ]]; then
+  _age_days=99999
+  if [[ -r "${full_marker}" ]]; then
+    _last=$(cat "${full_marker}" 2>/dev/null || echo 0)
+    [[ "${_last}" =~ ^[0-9]+$ ]] && _age_days=$(( ( $(date +%s) - _last ) / 86400 ))
+  fi
+  if [[ "${_age_days}" -ge "${FULL_BUILD_DAYS}" ]]; then
+    if [[ -r "${full_marker}" ]]; then
+      echo "[$(stamp)] last full build was ${_age_days} day(s) ago; building everything"
+    else
+      echo "[$(stamp)] no full build on record; building everything"
+    fi
+    force=true
+  fi
+  unset _age_days _last
+fi
+
 if [[ "${dry}" == "true" ]]; then
-  echo "[dry-run] mode=$([[ ${rebuild} == true ]] && echo rebuild || echo incremental) force=${force}; would build/scan: ${changed:-<nothing>}"
+  echo "[dry-run] mode=$([[ ${rebuild} == true ]] && echo rebuild || echo incremental) force=${force}; would build: $([[ ${force} == true ]] && echo '<all projects>' || echo "${changed:-<nothing>}")"
   exit 0
 fi
 
@@ -582,6 +607,9 @@ else
   build_projects="${changed}"
   [[ "${force}" == "true" ]] && build_projects=""
   run_stage build "${build_projects}" || finish FAILED build "${logdir}"
+  # Record the full pass only after it succeeded, so a broken week is retried
+  # tomorrow instead of being marked done.
+  [[ "${force}" == "true" ]] && date +%s > "${full_marker}"
   # The build leaves an apache-maven -bin.zip behind for the Maven source
   # projects; materialise it so the compatibility matrix binds a current
   # distribution. Unpacks only when the source commit moved, and never

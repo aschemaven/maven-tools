@@ -140,6 +140,66 @@ else
   printf '  its window and never while this nightly holds its lock.\n'
 fi
 
+# --- timings: this run against its own history ----------------------------
+# jqa-timings already keeps an append-only series per stage; jqa-nightly
+# collects into it just before the run ends, so by the time this runs the
+# current rows are present on the success path. Compare against the median of
+# the preceding runs ON THIS HOST -- the two machines differ enough in cores
+# and disk that a shared median would flag normal behaviour as a regression.
+hist="${root}/metrics/jqa-timings.tsv"
+if [[ -r "${hist}" ]]; then
+  printf '\n== Timings ==\n'
+  awk -F'\t' -v host="${host}" '
+    NR == 1 { next }
+    $6 != host || $5 != 0 { next }
+    { rows[++n] = $1 "\t" $2 "\t" $3 "\t" $4
+      if ($1 > latest) latest = $1 }
+    END {
+      # Collect per stage: the latest run id separately, everything else as
+      # history for the median.
+      for (i = 1; i <= n; i++) {
+        split(rows[i], f, "\t")
+        if (f[1] == latest) cur[f[3]] = f[4]
+        else                hist[f[3]] = hist[f[3]] " " f[4]
+      }
+      order = "build scan github analyze"
+      split(order, st, " ")
+      printf "  stage      this run   median    delta\n"
+      total = 0
+      for (k = 1; k <= 4; k++) {
+        stage = st[k]
+        if (!(stage in cur)) continue
+        total += cur[stage]
+        m = median(hist[stage])
+        d = (m > 0) ? sprintf("%+d%%", (cur[stage] - m) * 100 / m) : "n/a"
+        flag = (m > 0 && cur[stage] > 1.5 * m) ? "  <- slower" : ""
+        printf "  %-9s %9s %9s %8s%s\n", stage, hms(cur[stage]), (m > 0 ? hms(m) : "-"), d, flag
+      }
+      if (total > 0) printf "  %-9s %9s\n", "total", hms(total)
+    }
+    function hms(sec,  h, m) {
+      h = int(sec / 3600); m = int((sec % 3600) / 60)
+      return (h > 0) ? sprintf("%dh%02dm", h, m) : sprintf("%dm", m)
+    }
+    function median(list,  a, c, i, tmp, j) {
+      c = split(list, a, " ")
+      if (c == 0) return 0
+      for (i = 1; i < c; i++) for (j = i + 1; j <= c; j++)
+        if (a[j] + 0 < a[i] + 0) { tmp = a[i]; a[i] = a[j]; a[j] = tmp }
+      return (c % 2) ? a[(c + 1) / 2] + 0 : int((a[c/2] + a[c/2 + 1]) / 2)
+    }
+  ' "${hist}"
+
+  # The scan is the long pole, so name what inside it took the time.
+  pt="${root}/metrics/project-timings.tsv"
+  if [[ -r "${pt}" ]]; then
+    printf '\n  slowest projects recorded most recently:\n'
+    tail -400 "${pt}" | awk -F'\t' '$4+0 > 0 { printf "%s\t%s\n", $4, $3 }' \
+      | sort -rn | head -5 \
+      | awk -F'\t' '{ printf "    %-44s %dm%02ds\n", $2, int($1/60), $1%60 }'
+  fi
+fi
+
 # --- graph and disk -------------------------------------------------------
 printf '\n== Graph ==\n'
 nodes=$(grep -oE 'slot [a-z]+ verified: [0-9]+ nodes' "${root}/logs/jqa-nightly.out.log" 2>/dev/null | tail -1)
