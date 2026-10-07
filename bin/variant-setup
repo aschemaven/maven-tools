@@ -35,6 +35,27 @@ sdkman_maven_home() {
   [[ -x "${home}/bin/mvn" ]] && echo "${home}"
 }
 
+# Official releases come from SDKman, always -- so fetch one that is declared
+# but not installed instead of only warning about it.
+#
+# This matters beyond convenience: without a binary the variant falls back to
+# whatever `mvn` is on PATH, and the matrix then reports a cell labelled
+# "m3-10" that actually ran some other Maven. A wrong number is worse than a
+# missing one.
+#
+# SNAPSHOT and branch builds are never in the broker and must not be guessed
+# at; they come from install-maven-dist.
+sdkman_install_maven() {
+  local version="$1"
+  case "${version}" in *SNAPSHOT*) return 1 ;; esac
+  local init="${SDKMAN_DIR:-${HOME}/.sdkman}/bin/sdkman-init.sh"
+  [[ -r "${init}" ]] || return 1
+  echo "  installing Maven ${version} from SDKman"
+  # set +u: sdkman-init.sh reads unset variables of its own.
+  ( set +u; source "${init}" >/dev/null 2>&1; yes n 2>/dev/null | sdk install maven "${version}" ) >/dev/null 2>&1
+  [[ -x "${HOME}/.sdkman/candidates/maven/${version}/bin/mvn" ]]
+}
+
 # Which variants to set up: CLI args, else everything in variants.txt.
 # (Portable array fill -- macOS /bin/bash is 3.2 and has no mapfile.)
 # "${@}" counts as unbound under set -u when there are no arguments, and
@@ -69,6 +90,9 @@ for name in "${variants[@]}"; do
   # Stable, installed version -> symlink. Otherwise (SNAPSHOT / branch distro)
   # leave it to a future prepare step and warn.
   home="$(sdkman_maven_home "${version}" || true)"
+  if [[ -z "${home}" && -z "${branch}" ]] && sdkman_install_maven "${version}"; then
+    home="$(sdkman_maven_home "${version}" || true)"
+  fi
   if [[ -n "${home}" ]]; then
     ln -sfn "${home}" "${v_root}/maven"
     mvn_note="maven -> ${home}"
