@@ -37,8 +37,14 @@ m4-rc7         4.0.0-rc-7       21   -
 # --- SNAPSHOT lines, materialised from the nightly build ----------------------
 # install-maven-dist unpacks these from the distribution archives the pipeline
 # produces anyway; see maven-dists.txt.
+m3-10x         3.10.0-SNAPSHOT  21   -
 m4-40x         4.0.x-SNAPSHOT   21   -
 m4-41x         4.1.0-SNAPSHOT   21   -
+
+# Not tracked yet: 3.9.17-SNAPSHOT. The one M3 checkout carries the
+# maven-3.10.x line (its local branch is still named maven-3.9.x, but the
+# content is 3.10.x), so the 3.9 maintenance line needs the branch column and
+# a worktree -- and variant-setup's prepare step for that does not exist yet.
 
 # --- removed 2026-10-07 -------------------------------------------------------
 # The default-plugin-version refresh spike had five columns here: dpv-39,

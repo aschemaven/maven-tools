@@ -460,6 +460,22 @@ awk -F'\t' -v prevf="${prev}" '
 ' "${prev}" "${heads_cur}" > "${changed_file}" 2>/dev/null || : > "${changed_file}"
 
 echo "[$(stamp)] changed repositories: ${n_changed}"
+
+# Projects that must be built whatever the change detection says, because
+# something downstream depends on their build OUTPUT rather than on the graph.
+# The Maven core lines are the base of four matrix columns, and
+# install-maven-dist only unpacks -- it cannot conjure an archive that no
+# build produced.
+always_build=$(read_project_list_file "${root}/always-build-projects.txt")
+if [[ -n "${always_build}" ]]; then
+  for _p in ${always_build}; do
+    case " ${changed} " in *" ${_p} "*) ;; *) changed="${changed:+${changed} }${_p}" ;; esac
+  done
+  unset _p
+  n_changed=$(echo "${changed}" | wc -w | tr -d ' ')
+  echo "[$(stamp)] always-build adds up to $(echo "${always_build}" | wc -w | tr -d ' ') project(s); building ${n_changed}"
+fi
+
 [[ "${n_changed}" -gt 0 && "${n_changed}" -le 15 ]] && echo "    ${changed}"
 
 # A weekly full build, whether or not anything moved upstream. Building only

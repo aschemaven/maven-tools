@@ -1,0 +1,22 @@
+# Projects the nightly builds on EVERY run, whether or not their HEAD moved.
+#
+# The incremental build is right for the graph: an unchanged project produces
+# unchanged artefacts and the scan reads target/, which survives between runs.
+# It is wrong for the Maven distributions the compatibility matrix binds.
+#
+# install-maven-dist does not build anything -- it unpacks the apache-maven
+# -bin.zip that a build leaves behind. So a matrix column exists only if its
+# source project happened to be in that night's changed set. Measured on
+# godestorm 2026-10-07: core/maven had an archive, core/maven-4.0.x and
+# core/3.x/maven-3 had none, and the nightly had been logging
+# "no -bin.zip under core/maven-4.0.x -- build it first" for days while the
+# m4-40x column silently used a binary from an earlier week.
+#
+# These four are the base of four of six matrix columns, so they are worth
+# building unconditionally. Everything else stays change-driven.
+#
+# Format: one project path per line, as in the manifest. # and blank lines
+# are ignored.
+core/maven
+core/maven-4.0.x
+core/3.x/maven-3

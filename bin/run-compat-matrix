@@ -51,6 +51,19 @@ fi
 read -r -a matrix_projects <<< "${PROJECTS}"
 
 host=$(hostname -s 2>/dev/null || hostname || echo unknown)
+
+# Materialise the locally built Maven distributions before binding variants.
+# install-maven-dist only unpacks an apache-maven -bin.zip that a build has
+# already left behind, and it skips when the source commit has not moved --
+# so this is cheap and idempotent. Doing it here, and not only in the
+# nightly, decouples a matrix column from the accident of whether its source
+# project happened to be in last night's changed set.
+#
+# Never fatal: a missing archive means that column is skipped, which the
+# matrix now shows instead of silently borrowing the system Maven.
+if [[ -x "${dir}/install-maven-dist" ]]; then
+  "${dir}/install-maven-dist" || echo "install-maven-dist reported a problem; affected columns will be skipped" >&2
+fi
 opts="${MAVEN_REPO_LOCAL_OPT}"
 task="${MATRIX_GOALS// /-}"
 

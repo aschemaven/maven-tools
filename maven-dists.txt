@@ -18,3 +18,4 @@
 # "4.1.x" branch to name it after.
 4.0.x-SNAPSHOT   core/maven-4.0.x
 4.1.0-SNAPSHOT   core/maven
+3.10.0-SNAPSHOT  core/3.x/maven-3
