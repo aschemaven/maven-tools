@@ -46,6 +46,17 @@ marker="${state_dir}/fetched-graph.txt"
 : "${FETCH_FORCE:=false}"
 SSH=${SSH:-/usr/bin/ssh}
 
+# macOS keeps the agent socket in the per-user launchd environment, and a
+# launchd job starts without it -- so every ssh here failed with BatchMode and
+# the script reported "no source reachable" while the same call worked from a
+# shell. jqa-nightly already recovers it the same way; measured: with this
+# socket and an otherwise empty environment the aliases authenticate.
+if [[ -z "${SSH_AUTH_SOCK:-}" ]] && command -v launchctl >/dev/null 2>&1; then
+  _sock=$(launchctl getenv SSH_AUTH_SOCK 2>/dev/null) || _sock=""
+  [[ -n "${_sock}" ]] && export SSH_AUTH_SOCK="${_sock}"
+  unset _sock
+fi
+
 stamp() { date '+%F %T'; }
 say()   { echo "[$(stamp)] fetch-graph: $*"; }
 
