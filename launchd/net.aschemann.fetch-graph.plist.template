@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent that pulls the published graph from the machine that builds it.
+
+  Install (per machine):
+    sed "s#__TOOLS_ROOT__#$PWD#" launchd/net.aschemann.fetch-graph.plist.template \
+      > ~/Library/LaunchAgents/net.aschemann.fetch-graph.plist
+    launchctl load ~/Library/LaunchAgents/net.aschemann.fetch-graph.plist
+
+  WHY HOURLY AND NOT EVENT-DRIVEN
+    A push from the builder would be lost whenever this machine is asleep or
+    away. fetch-graph keys on the builder's run status, which changes exactly
+    once per completed run, so a generation is transferred at most once no
+    matter how often the agent fires. A tick that finds nothing new costs one
+    small ssh, so the cadence can be generous without being wasteful.
+
+  BANDWIDTH
+    fetch-graph transfers only over an alias listed in GRAPH_LAN_HOSTS. Over
+    the dyndns forward it mails the command to run by hand instead of moving
+    ~3.5 GB over a possibly mobile link. Set FETCH_REMOTE=true below to change
+    that for a machine that is always on a good line.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>net.aschemann.fetch-graph</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__TOOLS_ROOT__/bin/fetch-graph"</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__TOOLS_ROOT__</string>
+
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__TOOLS_ROOT__/logs/fetch-graph.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__TOOLS_ROOT__/logs/fetch-graph.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>

@@ -1,0 +1,146 @@
+#!/bin/bash
+set -u -o pipefail
+
+# fetch-graph - bring the published graph over from the machine that builds it.
+#
+# WHY
+#     The nightly moved to godestorm, so this machine no longer builds a graph
+#     of its own. Rebuilding one here just to have it locally would duplicate
+#     twelve hours of work on the same inputs.
+#
+# WHY PULL AND NOT PUSH
+#     This machine travels and sleeps; a push from the builder would be lost
+#     whenever it is away, and the builder would have to track who got what.
+#     Pulling needs no state on the builder: its own var/nightly-status.txt
+#     already changes exactly once per completed run, so that line IS the
+#     readiness marker. A check costs one small ssh, and a generation is
+#     fetched at most once however often this runs.
+#
+# WHY IT REFUSES TO FETCH FROM OUTSIDE BY DEFAULT
+#     The store is around 3.5 GB. Starting that over a mobile link by accident
+#     is worse than not having today's graph, so over a non-LAN alias it
+#     reports what to run by hand instead of transferring. FETCH_REMOTE=true
+#     overrides, for when the link is known to be fine.
+#
+# ENVIRONMENT
+#     GRAPH_SOURCE_HOSTS  ssh aliases to try, LAN first
+#                         (default "godestorm godestorm-fwd")
+#     GRAPH_LAN_HOSTS     which of those count as LAN (default "godestorm")
+#     GRAPH_SOURCE_ROOT   the builder's worktree (default: this worktree's path)
+#     FETCH_REMOTE        true to transfer over a non-LAN alias (default false)
+#     FETCH_MAIL          recipient for the "run it by hand" note
+#                         (default: NIGHTLY_MAIL, else unset = no mail)
+#     FETCH_FORCE         true to fetch even if the generation is unchanged
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+state_dir="${root}/var"
+base="${root}/jqassistant/publish"
+marker="${state_dir}/fetched-graph.txt"
+
+: "${GRAPH_SOURCE_HOSTS:=godestorm godestorm-fwd}"
+: "${GRAPH_LAN_HOSTS:=godestorm}"
+: "${GRAPH_SOURCE_ROOT:=${root}}"
+: "${FETCH_REMOTE:=false}"
+: "${FETCH_MAIL:=${NIGHTLY_MAIL:-}}"
+: "${FETCH_FORCE:=false}"
+SSH=${SSH:-/usr/bin/ssh}
+
+stamp() { date '+%F %T'; }
+say()   { echo "[$(stamp)] fetch-graph: $*"; }
+
+# A note the reader can paste, not a description of what they could have done.
+howto() {
+  printf 'cd %s\nFETCH_REMOTE=true ./bin/fetch-graph\n' "${root}"
+}
+mail_note() {
+  local subject="$1" body="$2"
+  [[ -n "${FETCH_MAIL}" ]] || return 0
+  command -v mail >/dev/null 2>&1 || return 0
+  {
+    printf '%s\n\n' "${body}"
+    printf 'To fetch it by hand:\n\n'
+    howto
+  } | mail -s "${subject}" "${FETCH_MAIL}" 2>/dev/null || true
+}
+
+is_lan() {
+  local h="$1" l
+  for l in ${GRAPH_LAN_HOSTS}; do [[ "${h}" == "${l}" ]] && return 0; done
+  return 1
+}
+
+# --- 1. who answers? ------------------------------------------------------
+source_host=""
+for h in ${GRAPH_SOURCE_HOSTS}; do
+  if "${SSH}" -o ConnectTimeout=10 -o BatchMode=yes "${h}" true >/dev/null 2>&1; then
+    source_host="${h}"; break
+  fi
+done
+if [[ -z "${source_host}" ]]; then
+  say "no source reachable (tried: ${GRAPH_SOURCE_HOSTS})"
+  mail_note "jQA graph not fetched: builder unreachable" \
+            "None of these answered: ${GRAPH_SOURCE_HOSTS}. The local graph stays as it is."
+  exit 0
+fi
+
+# --- 2. is there a new generation? ----------------------------------------
+remote_status=$("${SSH}" -o ConnectTimeout=10 "${source_host}" \
+  "cat '${GRAPH_SOURCE_ROOT}/var/nightly-status.txt' 2>/dev/null" || true)
+if [[ -z "${remote_status}" ]]; then
+  say "no run status on ${source_host}; nothing to do"
+  exit 0
+fi
+result=$(printf '%s' "${remote_status}" | awk -F'\t' '{print $2}')
+if [[ "${result}" != "OK" ]]; then
+  say "last run on ${source_host} is ${result:-unknown}; not fetching a partial graph"
+  exit 0
+fi
+generation=$(printf '%s' "${remote_status}" | awk -F'\t' '{print $1}')
+previous=$(cat "${marker}" 2>/dev/null || true)
+if [[ "${generation}" == "${previous}" && "${FETCH_FORCE}" != "true" ]]; then
+  say "already have the generation of ${generation}; nothing to do"
+  exit 0
+fi
+say "new generation on ${source_host}: ${generation} (had: ${previous:-none})"
+
+# --- 3. may we move 3.5 GB over this link? --------------------------------
+if ! is_lan "${source_host}" && [[ "${FETCH_REMOTE}" != "true" ]]; then
+  say "${source_host} is not a LAN alias; skipping the transfer"
+  mail_note "jQA graph ready on ${source_host}, not fetched" \
+            "$(printf 'A graph completed on %s at %s.\n\nThis machine reached it only through %s, which is not a LAN\nalias, so the ~3.5 GB transfer was skipped rather than started over\na possibly mobile link.' "${source_host}" "${generation}" "${source_host}")"
+  exit 0
+fi
+
+# --- 4. fetch into the passive slot ---------------------------------------
+mkdir -p "${base}/blue/data" "${base}/green/data"
+[[ -L "${base}/current" ]] || ln -sfn "${base}/blue" "${base}/current"
+active=$(basename "$(readlink "${base}/current")")
+passive=$([[ "${active}" == "blue" ]] && echo green || echo blue)
+
+say "staging ${source_host}:publish/current -> ${passive} (active: ${active})"
+# The source instance is served read-only, so nothing writes into it while we
+# copy and the snapshot is consistent without stopping anything.
+if ! rsync -a --delete --no-whole-file --stats -e "${SSH}" \
+      "${source_host}:${GRAPH_SOURCE_ROOT}/jqassistant/publish/current/data/" \
+      "${base}/${passive}/data/" 2>&1 | grep -E 'Literal data|Total file size' ; then
+  say "transfer failed"
+  mail_note "jQA graph fetch failed: transfer" \
+            "rsync from ${source_host} failed. The local graph is untouched; the passive slot may hold a partial copy and will be overwritten on the next attempt."
+  exit 1
+fi
+
+# --- 5. verify, then switch ----------------------------------------------
+if ! "${dir}/jqa-publish" verify; then
+  say "verification failed; not switching"
+  mail_note "jQA graph fetch failed: verification" \
+            "The copy from ${source_host} did not verify, so the switch was skipped and the previous graph stays online."
+  exit 1
+fi
+"${dir}/jqa-publish" switch || {
+  say "switch failed"
+  mail_note "jQA graph fetch failed: switch" "The copy verified but the switch failed."
+  exit 1
+}
+printf '%s\n' "${generation}" > "${marker}"
+say "done; now serving the generation of ${generation}"
