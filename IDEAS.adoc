@@ -139,3 +139,77 @@ Dependabot handles both shapes -- `docker` for base images, `pip` for Python ran
 mail-mcp already has it configured (there are open `dependabot/docker/python-3.14-slim` branches); maven-tools does not, and its images are pinned by hand.
 
 The rule worth adopting: every pin needs a refresh mechanism, and every range needs an upper bound.
+
+== A Maven 3 control run, to tell their bugs from ours
+
+Guillaume Nodet runs https://github.com/gnodet/maven4-testing[a comparable harness] over a broad corpus of Apache repositories on GitHub Actions.
+Its shape is strikingly close to ours -- `jdk-overrides.json` answers the same need as our `jdk21-projects.txt`, `maven4-extra-args.json` the same as `extra-mvn-args.txt`, and `create-chunks.sh` parallelises much as `run-compat-matrix` does.
+
+One thing it has that we do not is a control.
+Every project is built twice, once with Maven 3.9.9 and once with the Maven 4 under test, and the outcome is labelled `maven3-failed` when the project was already broken and `maven4-failed` only when Maven 3 was green.
+A failure is thus attributed automatically, and the 55 `maven4-failed` issues of the 4.0.0-rc-6 run are a set one can actually read.
+
+Our matrix has no such baseline.
+The run of 2026-09-21 produced 33 failures that had to be sorted by hand out of the logs, and the classification -- invoker, resolution, surefire, leftover fixtures -- says how a cell broke, never whether Maven 4 is to blame.
+A `m3` variant over the same components would answer that question for every cell at the cost of roughly doubling the run time.
+
+Whether that price is worth paying is open.
+A cheaper variant would run the control only for cells that failed, which keeps the green path at its current cost and still attributes every failure.
+
+== What the graph could say about the state of the ecosystem
+
+Both questions below are analysis, not tooling, and neither is urgent.
+They are recorded because the data to answer them is already in the store: the Maven POM schema gives every component's dependencies, the git plugin gives commit history, and the github-config plugin now adds the workflows.
+
+Which components are ageing?:: Age has several independent signals, and the graph holds them all.
+Last commit date and commit frequency come from the git plugin, release cadence from the version sequence in the POMs, and the JDK and plugin baselines from the build configuration.
+A component whose newest release predates its newest commit by years, or whose workflows still test only JDK 8, is a different kind of stale from one that simply sees few commits.
+The interesting output is not a ranking but a short list of components that the Maven 4 migration is likely to strand.
+
+Which third-party dependencies has the JDK made redundant?:: Much of what the older Maven components depend on predates the standard library catching up.
+File and path handling that `java.nio.file` now covers, string and collection helpers now in `java.util`, zip handling now in `java.util.zip`, HTTP now in `java.net.http`.
+Maven 4 raises the baseline far enough that some of these could simply be dropped, and plugins migrated to the v4 API are the natural place to look first.
+The graph can enumerate the candidates -- every component, its dependencies, and its source and target levels -- but deciding whether a given replacement is safe stays a reading exercise.
+
+== Watch whether a retirement actually completes
+
+A retirement has four steps: the vote, the announcement, renaming and
+archiving the repository, and removal from `apache/maven-sources`.
+Only the last one takes the component out of our corpus, and nothing connects the four.
+
+Observed on 2026-09-23: Maven Shared IO had been announced as retired on the 19th, its GitHub description already said `(RETIRED)`, and it was still in the manifest and not archived.
+`maven-doxia-book-maven-plugin` and `maven-verifier-plugin`, retired earlier, were complete on all four counts.
+So the path works; it is just not walked promptly.
+
+The watch only has to bridge the gap between the decision and the completion -- afterwards the component leaves the manifest and falls out of our corpus by itself.
+A list of announced retirements with their dates, and a warning when an entry has been open too long, is therefore enough.
+Three sources answer it: our own manifest, the GitHub repository state (`archived`, and whether the description says RETIRED), and the mailing list for `[VOTE] Retire` and `[ANN] Retirement`.
+
+The same query answers the more interesting question too: who in the corpus still depends on a component that is being retired.
+For `maven-verifier` we know part of the answer already -- Surefire, whose integration tests cannot run under Maven 4 because `Embedded3xLauncher` reflects on `MavenCli.doMain`, which Maven 4 does not have.
+
+== Disk pressure, not the work, drove the nightly runtime
+
+Worth recording because it was measured twice on two machines and misdiagnosed both times.
+
+On godecane in September a build went from 6550 to 1013 seconds and a scan from 18859 to 3212 for identical work, once the stores were excluded from Time Machine and the local snapshots were thinned.
+On godestorm on 2026-10-07 the same thing: the build fell from 116 to 20 minutes for the same 37 repositories, and the whole run from about thirteen hours to 3h26.
+
+The mechanism is not the space itself but the change rate multiplied by the snapshot frequency.
+A nightly rewrites around 22000 files under the Maven checkout and writes a 3.5 GB store; the net delta is small, but every hourly snapshot has to retain the previous version of all of it.
+Measured: 2.2 GB written in 100 minutes, 16 GiB consumed.
+
+The lesson for anything added later: a path whose contents are reproducible and whose change rate is high belongs outside Time Machine from the start, not after it hurts.
+`jqassistant/`, the Maven checkouts, `.m2`, `.m2-isolated`, `.github-cache` and the JDK class cache are all excluded now.
+
+== Check the matrix variants for currency
+
+`variants.txt` drifted for weeks without anyone noticing: it still tracked 4.0.0-rc-5 while rc-7 was in vote, carried five columns of a spike that had finished, and had no row for the released 3.10.0.
+The cost is paid every night, and the drift is invisible because a stale column still produces green cells.
+
+Three sources would answer it: the SDKman broker API for released lines (already used for the JDKs), the mailing list for `[VOTE] Release` and `[ANN]` so a candidate shows up before it reaches SDKman, and `variants.txt` itself.
+
+Deliberately NOT an automatic pull request.
+A variant is a decision, not a version string: `m4-rc6` looked exactly like a stale RC and was in fact the control column that separated "our bump broke it" from "Maven 4 breaks it anyway".
+An automaton would have deleted it.
+A line in the nightly mail with the row to paste is the right output.
