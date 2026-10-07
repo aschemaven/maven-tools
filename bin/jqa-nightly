@@ -206,15 +206,30 @@ notify_failure() {
   fi
 }
 
+# One mail per run, whatever the outcome. Previously a successful night said
+# nothing at all, so there was no way to tell whether the nightly was doing
+# useful work; and a failure said only which stage broke.
+notify_summary() {
+  local logdir="$1" result="$2"
+  [[ -n "${NIGHTLY_MAIL}" ]] || return 0
+  command -v mail >/dev/null 2>&1 || return 0
+  [[ -x "${dir}/nightly-summary" ]] || return 0
+  "${dir}/nightly-summary" "${logdir}" 2>/dev/null \
+    | mail -s "jQA nightly ${result}: $(hostname -s)" "${NIGHTLY_MAIL}" 2>/dev/null || true
+}
+
 finish() {
   local result="$1" stage="$2" logdir="$3" errlog="${4-}"
   printf '%s\t%s\t%s\t%s\n' "$(stamp)" "${result}" "${stage}" "${logdir}" > "${status_file}"
   if [[ "${result}" != "OK" ]]; then
     notify_failure "${stage}" "${logdir}" "${errlog}"
+    notify_summary "${logdir}" "FAILED at ${stage}"
     echo "[$(stamp)] FAILED at ${stage}; logs: ${logdir}" >&2
     exit 1
   fi
   echo "[$(stamp)] OK (${stage}); logs: ${logdir}"
+  [[ "${stage}" == "complete" ]] && notify_summary "${logdir}" "OK"
+  return 0
 }
 
 # --- 0a. Docker ------------------------------------------------------------
@@ -433,6 +448,16 @@ changed=$(awk -F'\t' -v prevf="${prev}" '
 ' "${prev}" "${heads_cur}" | tr '\n' ' ')
 changed="${changed% }"
 n_changed=$(echo "${changed}" | wc -w | tr -d ' ')
+
+# Record the moves WITH their SHAs, here and not later: heads_prev is
+# overwritten just before the run ends, so anything downstream that diffs the
+# two files again would see no difference at all.
+changed_file="${state_dir}/nightly-changed.tsv"
+awk -F'\t' -v prevf="${prev}" '
+  FILENAME == prevf { old[$1] = $2; next }
+  !($1 in old)      { printf "%s\t%s\t%s\n", $1, "-", $2; next }
+  old[$1] != $2     { printf "%s\t%s\t%s\n", $1, old[$1], $2 }
+' "${prev}" "${heads_cur}" > "${changed_file}" 2>/dev/null || : > "${changed_file}"
 
 echo "[$(stamp)] changed repositories: ${n_changed}"
 [[ "${n_changed}" -gt 0 && "${n_changed}" -le 15 ]] && echo "    ${changed}"

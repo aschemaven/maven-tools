@@ -1,0 +1,151 @@
+#!/bin/bash
+set -u -o pipefail
+
+# nightly-summary - one short mail about what the nightly actually did.
+#
+# WHY
+#     The nightly only ever wrote on failure, and then only the stage name.
+#     A run that succeeds says nothing at all, so there was no way to see
+#     whether it is doing useful work: which repositories moved, how the
+#     compatibility matrix fared, whether build or test success drifted.
+#
+# SYNOPSIS
+#     nightly-summary [<cycle-log-dir>]
+#
+#     Writes plain text to stdout. jqa-nightly pipes it to NIGHTLY_MAIL;
+#     run it by hand to see the same thing.
+#
+# DEGRADES
+#     Every section is optional. A machine that has never run the matrix
+#     says so instead of inventing numbers.
+#
+# STATE
+#     var/nightly-summary-matrix.tsv remembers the matrix cell states of the
+#     previous summary, so drift is computed against our own last run without
+#     depending on compat-report's internals.
+
+dir=$(dirname "${0}")
+root=$(cd "${dir}/.." && pwd)
+state_dir="${root}/var"
+cycle="${1-}"
+[[ -n "${cycle}" ]] || cycle=$(ls -1dt "${root}"/logs/jqa-cycle-* 2>/dev/null | head -1)
+
+host=$(hostname -s 2>/dev/null || echo unknown)
+status_line=$(cat "${state_dir}/nightly-status.txt" 2>/dev/null || echo "")
+outcome=$(printf '%s' "${status_line}" | awk -F'\t' '{print $2" "$3}')
+
+printf 'jQA Nightly  %s  %s\n' "${host}" "$(date '+%F %H:%M')"
+printf 'Outcome: %s\n' "${outcome:-unknown}"
+
+# --- stages ---------------------------------------------------------------
+if [[ -n "${cycle}" && -r "${cycle}/timing.txt" ]]; then
+  printf '\n== Stages ==\n'
+  awk '/^\[.*END  *[a-z]+ /{
+         for (i=1;i<=NF;i++) {
+           if ($i=="END") stage=$(i+1);
+           if ($i ~ /^rc=/) rc=substr($i,4);
+           if ($i ~ /^elapsed=/) el=substr($i,9);
+         }
+         printf "  %-10s %-9s rc=%s\n", stage, el, rc
+       }' "${cycle}/timing.txt"
+  mvnv=$(awk -F= '/^mvn=/{sub(/^mvn=/,""); print; exit}' "${cycle}/timing.txt")
+  [[ -n "${mvnv}" ]] && printf '  maven:     %s\n' "${mvnv}"
+fi
+
+# --- repositories ---------------------------------------------------------
+# jqa-nightly records the moves with their SHAs at detection time, because it
+# overwrites the previous HEADs just before it ends -- diffing the two files
+# here would therefore show nothing. Fall back to that diff anyway for a
+# summary run by hand between nightlies.
+changed_file="${state_dir}/nightly-changed.tsv"
+total=$(wc -l < "${state_dir}/nightly-heads.current" 2>/dev/null | tr -d ' ')
+printf '\n== Repositories ==\n'
+if [[ -r "${changed_file}" ]]; then
+  n=$(wc -l < "${changed_file}" | tr -d ' ')
+  printf '  %s of %s repositories moved\n' "${n}" "${total:-?}"
+  if (( n > 0 )); then
+    printf '\n'
+    awk -F'\t' '{ printf "  %-42s %s -> %s\n", $1, ($2=="-" ? "NEW     " : substr($2,1,8)), substr($3,1,8) }' \
+      "${changed_file}" | head -30
+    (( n > 30 )) && printf '  ... and %s more\n' "$((n - 30))"
+  fi
+elif [[ -r "${state_dir}/nightly-heads.tsv" && -r "${state_dir}/nightly-heads.current" ]]; then
+  awk -F'\t' 'NR==FNR{old[$1]=$2; next}
+              { if (!($1 in old))     printf "  %-42s NEW      -> %s\n", $1, substr($2,1,8);
+                else if (old[$1]!=$2) printf "  %-42s %s -> %s\n", $1, substr(old[$1],1,8), substr($2,1,8) }' \
+      "${state_dir}/nightly-heads.tsv" "${state_dir}/nightly-heads.current" > /tmp/nsum-fb.$$ 2>/dev/null || true
+  n=$(wc -l < /tmp/nsum-fb.$$ | tr -d ' ')
+  printf '  %s of %s repositories moved since the last recorded HEADs\n' "${n}" "${total:-?}"
+  (( n > 0 )) && { printf '\n'; head -30 /tmp/nsum-fb.$$; }
+  rm -f /tmp/nsum-fb.$$
+else
+  printf '  no HEAD history recorded yet\n'
+fi
+
+# --- matrix ---------------------------------------------------------------
+mx="${root}/reports/compat-matrix.md"
+printf '\n== Compatibility matrix ==\n'
+if [[ -r "${mx}" ]]; then
+  gen=$(awk '/^_Generated/{gsub(/[_*]/,""); print; exit}' "${mx}")
+  [[ -n "${gen}" ]] && printf '  %s\n' "${gen}"
+  printf '\n  Maven versions under test:\n'
+  awk '/^- `/{ gsub(/`/,""); sub(/^- /,"  - "); print "  "$0 }' "${mx}" | head -12
+
+  # Cell states straight out of the rendered table. Count OCCURRENCES in
+  # table rows only: "grep -c" counts lines, so a row with four green cells
+  # counted once, and the legend line -- which names all three markers --
+  # added one to every tally.
+  read -r ok bad warn < <(awk -F'|' '/^\| `/{
+        for (i=3;i<=NF;i++) {
+          if ($i ~ /white_check_mark/) o++;
+          else if ($i ~ /:x:/)         b++;
+          else if ($i ~ /warning/)     w++;
+        }
+      } END { printf "%d %d %d\n", o, b, w }' "${mx}")
+  printf '\n  Cells: %s ok, %s failed, %s unparseable\n' "${ok}" "${bad}" "${warn}"
+
+  # Drift against OUR previous summary, i.e. did build/test success change.
+  snap="${state_dir}/nightly-summary-matrix.tsv"
+  awk -F'|' '/^\| `/{
+      gsub(/`|  */,"",$2);
+      for (i=3;i<=NF;i++) {
+        s="?";
+        if ($i ~ /white_check_mark/) s="ok";
+        else if ($i ~ /:x:/)         s="fail";
+        else if ($i ~ /warning/)     s="warn";
+        else if ($i ~ /—/)           s="none";
+        if (s!="?") printf "%s\t%d\t%s\n", $2, i-2, s;
+      }
+    }' "${mx}" | sort > /tmp/nsum-mx.$$ 2>/dev/null || true
+  if [[ -r "${snap}" ]]; then
+    printf '\n  Drift since the previous summary:\n'
+    join -t'	' -j 1 <(awk -F'\t' '{print $1"#"$2"\t"$3}' "${snap}" | sort) \
+                     <(awk -F'\t' '{print $1"#"$2"\t"$3}' /tmp/nsum-mx.$$ | sort) 2>/dev/null \
+      | awk -F'\t' '$2!=$3 { split($1,a,"#"); printf "    %-42s col %s: %s -> %s\n", a[1], a[2], $2, $3; n++ }
+                    END { if (!n) print "    none -- every cell holds its previous state" }'
+  else
+    printf '\n  (no previous summary to compare against; recording this one as the baseline)\n'
+  fi
+  mkdir -p "${state_dir}" && cp -f /tmp/nsum-mx.$$ "${snap}" 2>/dev/null || true
+  rm -f /tmp/nsum-mx.$$
+
+  dr="${root}/reports/compat-drift.md"
+  if [[ -r "${dr}" ]]; then
+    printf '\n  Drift vs the upstream table:\n'
+    awk '/^Status mismatches/{gsub(/[*_]/,""); print "    "$0; exit}' "${dr}"
+  fi
+else
+  printf '  No matrix data on this machine yet (reports/compat-matrix.md missing).\n'
+  printf '  compat-tick renders it on its next tick; heavy builds only inside\n'
+  printf '  its window and never while this nightly holds its lock.\n'
+fi
+
+# --- graph and disk -------------------------------------------------------
+printf '\n== Graph ==\n'
+nodes=$(grep -oE 'slot [a-z]+ verified: [0-9]+ nodes' "${root}/logs/jqa-nightly.out.log" 2>/dev/null | tail -1)
+[[ -n "${nodes}" ]] && printf '  %s\n' "${nodes}"
+slot=$(readlink "${root}/jqassistant/publish/current" 2>/dev/null | sed 's#.*/##')
+[[ -n "${slot}" ]] && printf '  serving slot: %s\n' "${slot}"
+printf '  stores kept: %s\n' "$(ls -1d "${root}"/jqassistant/store-* 2>/dev/null | wc -l | tr -d ' ')"
+printf '\n== Disk ==\n'
+df -h "${HOME}" 2>/dev/null | tail -1 | awk '{printf "  %s free of %s (%s used)\n", $4, $2, $5}'
