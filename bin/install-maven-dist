@@ -60,21 +60,34 @@ descriptor="${root}/maven-dists.txt"
 
 projects_dir="${root}/${MAVEN_PROJECTS_DIR:-maven}"
 dists_dir="${MAVEN_TOOLS_CACHE:-${root}}/dists"
+lines_dir="${root}/maven-lines"
 sdk_dir="${HOME}/.sdkman/candidates/maven"
 mkdir -p "${dists_dir}"
 
 stamp() { date '+%F %T'; }
 rc=0
 
-while read -r version project rest; do
+while read -r version project branch rest; do
   [[ -z "${version}" || "${version}" == \#* ]] && continue
   if [[ -n "${wanted// /}" ]]; then
     case " ${wanted} " in *" ${version} "*) ;; *) continue ;; esac
   fi
 
-  src="${projects_dir}/${project}"
+  # A third column names a BRANCH. The manifest checks out one branch per
+  # project, so a second active line of the same repository (maven-3.9.x next
+  # to maven-3.10.x) has no checkout of its own and lives in a worktree that
+  # build-maven-lines materialises. Read the archive from there.
+  if [[ -n "${branch}" && "${branch}" != "-" ]]; then
+    src="${lines_dir}/${version}"
+  else
+    src="${projects_dir}/${project}"
+  fi
   if [[ ! -d "${src}" ]]; then
-    echo "[$(stamp)] ${version}: source ${project} missing -- skipped" >&2
+    if [[ -n "${branch}" && "${branch}" != "-" ]]; then
+      echo "[$(stamp)] ${version}: no worktree for branch ${branch} -- run build-maven-lines" >&2
+    else
+      echo "[$(stamp)] ${version}: source ${project} missing -- skipped" >&2
+    fi
     rc=1; continue
   fi
 

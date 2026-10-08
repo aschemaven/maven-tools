@@ -1,0 +1,133 @@
+#!/bin/bash
+set -u -o pipefail
+
+# build-maven-lines - build a Maven distribution from a branch the manifest
+#                     does not check out.
+#
+# WHY
+#     The repo manifest gives one branch per project. Maven keeps several
+#     lines alive at once, so core/3.x/maven-3 can only ever be ONE of
+#     maven-3.9.x and maven-3.10.x -- measured: that checkout carries the
+#     3.10.x content while its local branch is still named maven-3.9.x, so
+#     3.9.17-SNAPSHOT had no source at all.
+#
+#     Entries in maven-dists.txt with a third column name such a branch. This
+#     materialises a worktree for it under maven-lines/<version> and builds
+#     the distribution archive, which install-maven-dist then unpacks.
+#
+# WHY A WORKTREE AND NOT A SECOND CLONE
+#     The objects are already local. A worktree costs a checkout, not a fetch,
+#     and it shares the repository the manifest maintains -- so a plain
+#     "repo sync" keeps the branch reachable without any extra bookkeeping.
+#
+# CAUTION
+#     "git worktree add" writes metadata into the component repository. Do not
+#     run this while a build or scan is using that tree; compat-4x-setup
+#     carries the same warning for the same reason.
+#
+# SYNOPSIS
+#     build-maven-lines [<version> ...]      # default: every branch entry
+#
+# ENVIRONMENT
+#     MAVEN_DISTS_FILE  descriptor (default maven-dists.txt)
+#     LINES_MVN_VERSION Maven used to BUILD (default 3.9.16: a 3.x line must
+#                       not be built with Maven 4, whose model it predates)
+#     LINES_JDK         JDK major for the build (default 21)
+#     LINES_GOALS       build goals (default: -pl apache-maven -am package
+#                       -DskipTests -- only the distribution module and what
+#                       it needs, which is a fraction of a full build)
+
+dir=$(dirname "${0}")
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+
+: "${MAVEN_DISTS_FILE:=${root}/maven-dists.txt}"
+: "${LINES_MVN_VERSION:=3.9.16}"
+: "${LINES_JDK:=21}"
+: "${LINES_GOALS:=-pl apache-maven -am package -DskipTests}"
+
+projects_dir="${root}/${MAVEN_PROJECTS_DIR:-maven}"
+lines_dir="${root}/maven-lines"
+wanted="${*:-}"
+stamp() { date '+%F %T'; }
+rc=0
+
+[[ -r "${MAVEN_DISTS_FILE}" ]] || { echo "No descriptor ${MAVEN_DISTS_FILE}" >&2; exit 1; }
+
+mvn_bin=$(find_mvn_by_version "${LINES_MVN_VERSION}")
+if [[ -z "${mvn_bin}" || ! -x "${mvn_bin}" ]]; then
+  echo "build-maven-lines: Maven ${LINES_MVN_VERSION} not found; cannot build" >&2
+  exit 1
+fi
+jdk_home=$(find_java_home "${LINES_JDK}" "${JQA_JDK_VENDOR:-tem}")
+[[ -n "${jdk_home}" ]] || { echo "build-maven-lines: no JDK ${LINES_JDK}" >&2; exit 1; }
+
+mkdir -p "${lines_dir}"
+exclude_from_backup "${lines_dir}" 2>/dev/null || true
+
+while read -r version project branch rest; do
+  [[ -z "${version}" || "${version}" == \#* ]] && continue
+  [[ -n "${branch}" && "${branch}" != "-" ]] || continue
+  if [[ -n "${wanted// /}" ]]; then
+    case " ${wanted} " in *" ${version} "*) ;; *) continue ;; esac
+  fi
+
+  comp="${projects_dir}/${project}"
+  if [[ ! -d "${comp}/.git" ]]; then
+    echo "[$(stamp)] ${version}: ${project} is not a git checkout -- skipped" >&2
+    rc=1; continue
+  fi
+
+  # Audit rather than assume: a branch that upstream renamed must be reported,
+  # not silently built from whatever HEAD happens to be.
+  ref="origin/${branch}"
+  if ! git -C "${comp}" rev-parse --verify --quiet "${ref}" >/dev/null; then
+    echo "[$(stamp)] ${version}: ${ref} does not exist in ${project} -- skipped" >&2
+    rc=1; continue
+  fi
+
+  dest="${lines_dir}/${version}"
+  if [[ -d "${dest}/.git" || -f "${dest}/.git" ]]; then
+    git -C "${dest}" fetch -q origin "${branch}" 2>/dev/null || true
+    git -C "${dest}" checkout -q --detach "${ref}" 2>/dev/null \
+      || { echo "[$(stamp)] ${version}: cannot update worktree to ${ref}" >&2; rc=1; continue; }
+  else
+    rm -rf "${dest}"
+    if ! git -C "${comp}" worktree add -q --detach "${dest}" "${ref}" 2>/dev/null; then
+      echo "[$(stamp)] ${version}: worktree add failed for ${ref}" >&2
+      rc=1; continue
+    fi
+    echo "[$(stamp)] ${version}: worktree created at maven-lines/${version} (${ref})"
+  fi
+
+  head=$(git -C "${dest}" rev-parse HEAD 2>/dev/null || echo "")
+  marker="${dest}/.built-commit"
+  built=""
+  [[ -r "${marker}" ]] && built=$(cat "${marker}")
+  archive=$(ls -1t "${dest}"/apache-maven/target/apache-maven-*-bin.zip 2>/dev/null | head -1 || true)
+  if [[ -n "${head}" && "${head}" == "${built}" && -n "${archive}" ]]; then
+    echo "[$(stamp)] ${version}: unchanged (${head:0:8}) -- archive present"
+    continue
+  fi
+
+  echo "[$(stamp)] ${version}: building ${ref} (${head:0:8}) with Maven ${LINES_MVN_VERSION}, JDK ${LINES_JDK}"
+  log="${root}/logs/build-maven-line-${version}-$(date +%y%m%d-%H%M%S).log"
+  mkdir -p "${root}/logs"
+  # shellcheck disable=SC2086
+  if ( cd "${dest}" && JAVA_HOME="${jdk_home}" "${mvn_bin}" -B -s "${SETTINGS}" \
+         ${MAVEN_REPO_LOCAL_OPT} ${LINES_GOALS} ) > "${log}" 2>&1; then
+    archive=$(ls -1t "${dest}"/apache-maven/target/apache-maven-*-bin.zip 2>/dev/null | head -1 || true)
+    if [[ -n "${archive}" ]]; then
+      printf '%s\n' "${head}" > "${marker}"
+      echo "[$(stamp)] ${version}: built $(basename "${archive}")"
+    else
+      echo "[$(stamp)] ${version}: build succeeded but no -bin.zip; see ${log#"${root}"/}" >&2
+      rc=1
+    fi
+  else
+    echo "[$(stamp)] ${version}: build FAILED; see ${log#"${root}"/}" >&2
+    rc=1
+  fi
+done < "${MAVEN_DISTS_FILE}"
+
+exit "${rc}"

@@ -543,23 +543,8 @@ else
 fi
 store_dir="${root}/jqassistant/store${JQA_STORE_SUFFIX}"
 
-# Keep the store out of Time Machine. A 4 GB directory written afresh every
-# night is snapshotted hourly, which is what turned a two-hour run into twelve
-# and filled the volume from 116 GB free to 43 in four days.
-#
-# Done here rather than left to the tm-exclusions sweep: that sweep reports
-# "added=0" for these paths even though its own find predicate matches them,
-# and a nightly must not depend on an external job for its own throughput.
-# The exclusion is path-based and dies with the directory, which is correct --
-# each run excludes the store it just created.
-exclude_from_backup() {
-  command -v tmutil >/dev/null 2>&1 || return 0
-  mkdir -p "$1" 2>/dev/null || return 0
-  tmutil addexclusion "$1" 2>/dev/null \
-    && echo "[$(stamp)] excluded from Time Machine: $(basename "$1")" \
-    || echo "[$(stamp)] could not exclude $(basename "$1") from Time Machine" >&2
-  return 0
-}
+# Keep the store out of Time Machine -- see exclude_from_backup in
+# common-functions.sh for why this matters and why the producer does it.
 exclude_from_backup "${store_dir}"
 
 # --- 1b. seed the fresh store with the JDK graph --------------------------

@@ -1,6 +1,11 @@
 # Maven distributions to materialise for the compatibility matrix.
 #
-#   <sdkman-version>   <project path under MAVEN_PROJECTS_DIR>
+#   <sdkman-version>   <project path under MAVEN_PROJECTS_DIR>   [branch]
+#
+# A third column names a branch the manifest does NOT check out. The repo
+# manifest gives one branch per project, so a second active line of the same
+# repository needs a worktree; build-maven-lines materialises and builds it
+# under maven-lines/<version>.
 #
 # The distribution archive is a by-product of the normal nightly build -- the
 # listed projects are part of the 125 the pipeline builds anyway -- so nothing
@@ -19,3 +24,4 @@
 4.0.x-SNAPSHOT   core/maven-4.0.x
 4.1.0-SNAPSHOT   core/maven
 3.10.0-SNAPSHOT  core/3.x/maven-3
+3.9.17-SNAPSHOT  core/3.x/maven-3   maven-3.9.x

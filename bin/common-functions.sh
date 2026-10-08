@@ -798,3 +798,27 @@ exec_mvn() {
   fi
   set -e
 }
+# --- Backup exclusion ------------------------------------------------------
+# Keep high-churn, fully reproducible directories out of Time Machine. A 4 GB
+# directory written afresh every night is snapshotted hourly, which is what
+# turned a two-hour run into twelve and filled the volume from 116 GB free to
+# 43 in four days: the cost is the change rate times the snapshot frequency,
+# not the net delta.
+#
+# Done by the producing script rather than left to the tm-exclusions sweep:
+# that sweep reports "added=0" for these paths even though its own find
+# predicate matches them, and a job must not depend on an external sweep for
+# its own throughput. The exclusion is path-based and dies with the directory,
+# which is correct -- each run excludes the tree it just created.
+#
+# Lives here, not in a single caller, because every producer of such a tree
+# needs it (the nightly's store, build-maven-lines' worktrees). It carries its
+# own timestamp instead of calling a stamp() the caller may not define.
+exclude_from_backup() {
+  command -v tmutil >/dev/null 2>&1 || return 0
+  mkdir -p "$1" 2>/dev/null || return 0
+  tmutil addexclusion "$1" 2>/dev/null \
+    && echo "[$(date '+%F %T')] excluded from Time Machine: $(basename "$1")" \
+    || echo "[$(date '+%F %T')] could not exclude $(basename "$1") from Time Machine" >&2
+  return 0
+}
