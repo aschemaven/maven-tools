@@ -13,3 +13,17 @@
 # `junitPlatformArtifact is null` even when extensions.xml is empty --
 # the extension is pulled in elsewhere.
 plugins/core/surefire
+
+# maven-parent 50 brought surefire 3.6.0, whose SurefireMojo no longer carries
+# the generateTestClasspath() signature Develocity 1.23 reflects on:
+#   "The method 'org.apache.maven.plugin.surefire.SurefireMojo
+#    #generateTestClasspath' was not found with param types: '[]'"
+# The core build then dies in maven-model, no distribution archive is produced,
+# and the matrix column silently keeps whatever binary it had -- m4-40x served
+# a 2026-09-17 build for three weeks while reporting as 4.0.x-SNAPSHOT, and
+# m3-10x never got a binary at all.
+#
+# TEMPORARY: the real fix is a Develocity bump past 1.23 (2.x). Remove these
+# two lines once that is validated.
+core/3.x/maven-3
+core/maven-4.0.x
