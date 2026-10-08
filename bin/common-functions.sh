@@ -725,7 +725,7 @@ exec_mvn() {
           printf '  <extension>\n    <groupId>eu.maveniverse.maven.mimir</groupId>\n    <artifactId>extension3</artifactId>\n    <version>%s</version>\n  </extension>\n' "${MIMIR_VERSION:-0.12.0}"
         fi
         if [[ "${want_dev}" == "true" ]]; then
-          printf '  <extension>\n    <groupId>com.gradle</groupId>\n    <artifactId>develocity-maven-extension</artifactId>\n    <version>%s</version>\n  </extension>\n' "${DEVELOCITY_VERSION:-1.23}"
+          printf '  <extension>\n    <groupId>com.gradle</groupId>\n    <artifactId>develocity-maven-extension</artifactId>\n    <version>%s</version>\n  </extension>\n' "${DEVELOCITY_VERSION:-2.6.0}"
         fi
         echo '</extensions>'
       } > "${own_ext}"
