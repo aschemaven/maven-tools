@@ -151,7 +151,7 @@ sort -o "${current_heads}" "${current_heads}"
 current_vars="${state_dir}/tick-variants.current"
 : > "${current_vars}"
 for v in ${all_variants}; do
-  fp=$(variant_field "${v}" 2)                       # version string
+  fp=$(variant_version "${v}")                       # resolved version string
   m="$(variant_root "${v}")/maven/bin/mvn"
   if [[ -e "${m}" ]]; then
     mt=$(stat -f %m "${m}" 2>/dev/null || stat -c %Y "${m}" 2>/dev/null || echo 0)

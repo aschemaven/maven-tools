@@ -235,7 +235,7 @@ build_component_row() {
     jq -n \
       --arg status "${result}" \
       --arg time "${btime}" \
-      --arg mvn "$(variant_field "${variant}" 2)" \
+      --arg mvn "$(variant_version "${variant}")" \
       --arg jdk "$(variant_jdk "${variant}")" \
       --arg head "${head_commit}" \
       --arg host "${host}" \

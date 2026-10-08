@@ -80,7 +80,7 @@ for name in "${variants[@]}"; do
   fi
 
   v_root="$(variant_root "${name}")"
-  version="$(variant_field "${name}" 2)"
+  version="$(variant_version "${name}")"
   branch="$(variant_field "${name}" 4)"
   jdk="$(variant_jdk "${name}")"
 

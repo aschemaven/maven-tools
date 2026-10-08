@@ -220,6 +220,99 @@ variant_field() {
   echo "${val}"
 }
 
+# --- Version resolution ("auto") -------------------------------------------
+# A SNAPSHOT variant pinned by hand goes stale the moment upstream releases:
+# 3.10.0 shipped, maven-3.10.x moved to 3.10.1-SNAPSHOT, and our pinned
+# "3.10.0-SNAPSHOT" silently matched nothing -- the m3-10x column stood empty
+# for days while every tick reported "no Maven resolved".
+#
+# So SNAPSHOT versions are not pinned any more; they are read from the source
+# that defines them. "auto" in a version column means "whatever this project
+# declares". A release that advances the branch to the next bugfix SNAPSHOT is
+# then picked up on the next tick, with no manifest edit and no staleness --
+# and it covers a minor or major bump too, which incrementing a patch number
+# would miss.
+#
+# Released versions stay pinned: they are deliberate fixed reference points.
+
+# Project version from a POM: the first <version> outside <parent>. A project
+# that declares none inherits the parent's, exactly as Maven resolves it.
+pom_project_version() {
+  local pom="$1" v=""
+  [[ -r "${pom}" ]] || return 1
+  # One awk, no pipeline: a "grep -m1" downstream would SIGPIPE the producer
+  # and, under pipefail, turn this into a failure (bitten twice already).
+  v=$(awk '
+    /<parent>/        { inparent = 1 }
+    /<\/parent>/      { inparent = 0; next }
+    !inparent && match($0, /<version>[^<]*<\/version>/) {
+      s = substr($0, RSTART, RLENGTH); gsub(/<[^>]*>/, "", s); print s; exit
+    }' "${pom}" 2>/dev/null)
+  if [[ -z "${v}" ]]; then
+    v=$(awk '
+      /<parent>/ { inparent = 1 }
+      inparent && match($0, /<version>[^<]*<\/version>/) {
+        s = substr($0, RSTART, RLENGTH); gsub(/<[^>]*>/, "", s); print s; exit
+      }
+      /<\/parent>/ { inparent = 0 }' "${pom}" 2>/dev/null)
+  fi
+  [[ -n "${v}" ]] || return 1
+  printf '%s\n' "${v}"
+}
+
+# Same, but straight from a git ref -- no worktree needed. Used for a branch
+# the manifest does not check out, where asking the working tree is impossible
+# because the worktree is named after the very version we are resolving.
+git_pom_version() {
+  local repo="$1" ref="$2" tmp v
+  git -C "${repo}" rev-parse --verify --quiet "${ref}" >/dev/null 2>&1 || return 1
+  tmp=$(mktemp) || return 1
+  if git -C "${repo}" show "${ref}:pom.xml" > "${tmp}" 2>/dev/null; then
+    v=$(pom_project_version "${tmp}") || v=""
+  fi
+  rm -f "${tmp}"
+  [[ -n "${v:-}" ]] || return 1
+  printf '%s\n' "${v}"
+}
+
+# resolve_version <spec> [<project>] [<branch>]
+#   <spec> is a literal version, "auto", or "auto@<project path>".
+# Prints the concrete version, or nothing (rc 1) when it cannot be resolved --
+# callers must treat that as "skip this column", never as a usable version.
+resolve_version() {
+  local spec="$1" project="${2-}" branch="${3-}" comp v
+  case "${spec}" in
+    auto@*) project="${spec#auto@}" ;;
+    auto)   : ;;
+    *)      printf '%s\n' "${spec}"; return 0 ;;
+  esac
+  if [[ -z "${project}" ]]; then
+    echo "resolve_version: '${spec}' names no project to read the version from" >&2
+    return 1
+  fi
+  comp="${root}/${MAVEN_PROJECTS_DIR:-maven}/${project}"
+  if [[ -n "${branch}" && "${branch}" != "-" ]]; then
+    v=$(git_pom_version "${comp}" "origin/${branch}") || v=""
+  else
+    v=$(pom_project_version "${comp}/pom.xml") || v=""
+  fi
+  if [[ -z "${v}" ]]; then
+    echo "resolve_version: cannot read a version from ${project}${branch:+ (origin/${branch})}" >&2
+    return 1
+  fi
+  # Guard against a parse that drifted: a version has a digit and no space.
+  if [[ "${v}" != *[0-9]* || "${v}" == *[[:space:]]* ]]; then
+    echo "resolve_version: '${v}' from ${project} does not look like a version" >&2
+    return 1
+  fi
+  printf '%s\n' "${v}"
+}
+
+# The variant's CONCRETE Maven version (resolving "auto@<project>").
+variant_version() {
+  resolve_version "$(variant_field "$1" 2)" "" "" 2>/dev/null || echo ""
+}
+
 # True if <name> is a declared variant (has a row in variants.txt).
 variant_exists() {
   [[ -n "$(variant_field "$1" 2)" ]]
@@ -238,7 +331,7 @@ variant_mvn() {
     return
   fi
   local version
-  version=$(variant_field "${name}" 2)
+  version=$(variant_version "${name}")
   [[ -n "${version}" ]] && find_mvn_by_version "${version}"
 }
 
@@ -703,10 +796,10 @@ exec_mvn() {
       #
       # Skipping leaves the cell empty, which the matrix renders as "no result
       # yet" -- honest, and visible.
-      echo "SKIP variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_field "${variant}" 2))" >&2
+      echo "SKIP variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_version "${variant}"))" >&2
       return 2
     fi
-    mvn_info="variant ${variant} (Maven $(variant_field "${variant}" 2))"
+    mvn_info="variant ${variant} (Maven $(variant_version "${variant}"))"
     [[ -n "${v_javahome}" ]] && mvn_info="${mvn_info}, JDK $(variant_jdk "${variant}")"
   elif test -r "${project_dir}/mvnw"; then
     mvn="./mvnw"
@@ -749,6 +842,7 @@ exec_mvn() {
   local _t0; _t0=$(date +%s)
   local attempt=0
   local current_logs
+
   while :; do
     if [[ ${attempt} -eq 0 ]]; then
       current_logs="${logs}"

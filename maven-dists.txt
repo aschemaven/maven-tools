@@ -1,6 +1,11 @@
 # Maven distributions to materialise for the compatibility matrix.
 #
-#   <sdkman-version>   <project path under MAVEN_PROJECTS_DIR>   [branch]
+#   <version>   <project path under MAVEN_PROJECTS_DIR>   [branch]
+#
+# <version> is either a literal version or "auto", meaning "read it from the
+# project's POM" (from origin/<branch> when a branch is given). SNAPSHOT lines
+# use "auto" so a release that advances the branch is picked up without a
+# manifest edit -- see variants.txt for why pinning them went wrong.
 #
 # A third column names a branch the manifest does NOT check out. The repo
 # manifest gives one branch per project, so a second active line of the same
@@ -21,7 +26,7 @@
 #
 # master is listed under the version it reports, 4.1.0-SNAPSHOT: there is no
 # "4.1.x" branch to name it after.
-4.0.x-SNAPSHOT   core/maven-4.0.x
-4.1.0-SNAPSHOT   core/maven
-3.10.0-SNAPSHOT  core/3.x/maven-3
-3.9.17-SNAPSHOT  core/3.x/maven-3   maven-3.9.x
+auto             core/maven-4.0.x
+auto             core/maven
+auto             core/3.x/maven-3
+auto             core/3.x/maven-3   maven-3.9.x

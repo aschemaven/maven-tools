@@ -68,6 +68,16 @@ exclude_from_backup "${lines_dir}" 2>/dev/null || true
 while read -r version project branch rest; do
   [[ -z "${version}" || "${version}" == \#* ]] && continue
   [[ -n "${branch}" && "${branch}" != "-" ]] || continue
+
+  # "auto" resolves straight from origin/<branch> -- no worktree needed, which
+  # matters here because the worktree is named after the very version we are
+  # resolving.
+  spec="${version}"
+  if ! version=$(resolve_version "${spec}" "${project}" "${branch}"); then
+    echo "[$(stamp)] ${project} (${branch}): cannot resolve version from '${spec}' -- skipped" >&2
+    rc=1; continue
+  fi
+
   if [[ -n "${wanted// /}" ]]; then
     case " ${wanted} " in *" ${version} "*) ;; *) continue ;; esac
   fi

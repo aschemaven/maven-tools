@@ -69,6 +69,16 @@ rc=0
 
 while read -r version project branch rest; do
   [[ -z "${version}" || "${version}" == \#* ]] && continue
+
+  # "auto" means "read the version from the project". Resolved BEFORE the
+  # wanted-filter, so a command-line selection names the concrete version the
+  # caller sees everywhere else rather than the literal word "auto".
+  spec="${version}"
+  if ! version=$(resolve_version "${spec}" "${project}" "${branch}"); then
+    echo "[$(stamp)] ${project}: cannot resolve version from '${spec}' -- skipped" >&2
+    rc=1; continue
+  fi
+
   if [[ -n "${wanted// /}" ]]; then
     case " ${wanted} " in *" ${version} "*) ;; *) continue ;; esac
   fi
