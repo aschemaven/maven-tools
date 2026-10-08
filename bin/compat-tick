@@ -94,8 +94,28 @@ in_nightly_window() {
 nightly_running() {
   [[ -d "${root}/.jqa-nightly.lock" ]]
 }
+# A matrix already in flight must be detected HERE and not only inside
+# run-compat-matrix. The change set below is consumed with "mv -f" after the
+# build round returns; a matrix that exits 0 because it was locked out would
+# look like a completed round and the pending component changes would be
+# dropped. Failing should_build() takes the else-branch, which deliberately
+# leaves the state stale so the next allowed tick still sees them.
+matrix_running() {
+  local lp
+  [[ -d "${root}/.compat-matrix.lock" ]] || return 1
+  lp=$(cat "${root}/.compat-matrix.lock/pid" 2>/dev/null || echo "")
+  [[ -n "${lp}" ]] && kill -0 "${lp}" 2>/dev/null
+}
 
 should_build() {
+  # Checked before FORCE_BUILD: yielding to the nightly or waiting for an idle
+  # window is policy a manual run may override, but two matrices writing the
+  # same variants/<v>/cells/<project>.json is not -- that is corruption, plus
+  # the dropped-change-set problem above.
+  if matrix_running; then
+    echo "compat-tick: a compat matrix is still running; skipping the build"
+    return 1
+  fi
   if ${FORCE_BUILD}; then return 0; fi
   if nightly_running; then
     echo "compat-tick: jqa-nightly is running; skipping the build"

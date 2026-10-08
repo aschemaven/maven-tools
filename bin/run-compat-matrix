@@ -30,6 +30,46 @@ set -eu -o pipefail
 dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
 
+# --- single instance ------------------------------------------------------
+# A full matrix takes many hours; launchd fires compat-tick every 3600s. With
+# no lock each tick stacked another matrix on the running one -- measured on
+# godestorm with two concurrent runs and a 5-minute load average of 161.
+# compat-tick only ever consulted the nightly's lock, never the matrix's own,
+# and nothing stopped a manual run and a tick from colliding either. The lock
+# lives here, so it protects against any launcher and not just compat-tick.
+#
+# mkdir is the atomic test-and-set. The pid file turns a lock left behind by a
+# killed run into something detectable: the matrix is unattended, so a stale
+# lock would otherwise silence every future tick forever -- the same shape of
+# failure as the six days of "FAILED: publish" mails.
+lock="${root}/.compat-matrix.lock"
+if ! mkdir "${lock}" 2>/dev/null; then
+  lock_pid=$(cat "${lock}/pid" 2>/dev/null || echo "")
+  if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null; then
+    echo "run-compat-matrix: another run is active (pid ${lock_pid}); exiting" >&2
+    exit 0
+  fi
+  echo "run-compat-matrix: clearing stale ${lock} (pid '${lock_pid:-none}' is gone)" >&2
+  rm -rf "${lock}"
+  mkdir "${lock}" 2>/dev/null || { echo "run-compat-matrix: cannot acquire ${lock}; exiting" >&2; exit 0; }
+fi
+echo "$$" > "${lock}/pid"
+# This script forks subshells of itself (visible as sibling run-compat-matrix
+# processes in ps). Bash resets traps in a subshell, but the pid check makes
+# that guarantee explicit rather than relied upon: only the owner releases.
+release_lock() {
+  [[ -f "${lock}/pid" ]] || return 0
+  [[ "$(cat "${lock}/pid" 2>/dev/null)" == "$$" ]] || return 0
+  rm -rf "${lock}"
+}
+# EXIT alone does not cover a kill: SIGTERM (launchd stopping the job, timeout,
+# a plain "kill") would leave the directory behind. The stale-pid check above
+# recovers from that on the next run, but releasing here keeps the common case
+# clean instead of relying on the recovery path.
+trap release_lock EXIT
+trap 'release_lock; exit 143' TERM
+trap 'release_lock; exit 130' INT
+
 : "${MATRIX_GOALS:=-Prun-its clean verify}"
 # Optional cell namespace: cells go to variants/<v>/cells/<MATRIX_NS>/<project>.
 # Used by run-compat-4x (MATRIX_NS=_4x) so worktree-built 4.x lines do not
