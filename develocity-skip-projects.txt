@@ -9,8 +9,18 @@
 # Override at runtime by setting DEVELOCITY_SKIP_PROJECTS (space-separated)
 # or DEVELOCITY_SKIP_PROJECTS="" to disable per-project deactivation.
 
-# Surefire crashes the Develocity extension with
-# `junitPlatformArtifact is null` even when extensions.xml is empty --
-# the extension is pulled in elsewhere.
+# Develocity crashes surefire's build with `junitPlatformArtifact is null`,
+# and the 2.6.0 bump does NOT fix it. Measured in an isolated worktree, one
+# extension at a time, each with its own local repository:
+#
+#   no extensions      0 junitPlatformArtifact, 0 Develocity errors
+#   mimir 0.12.0 only  0 junitPlatformArtifact, 0 Develocity errors
+#   Develocity 2.6.0   2 junitPlatformArtifact, 3 Develocity errors
+#
+# So it is Develocity, not mimir, and it is version-independent (1.23 behaves
+# the same). The entry is currently INERT: exec_mvn leaves a tracked
+# .mvn/extensions.xml alone and surefire ships one, so the extension never
+# reaches that build anyway. It stays as the guard for the day that changes --
+# removing it would silently re-expose a verified incompatibility.
 plugins/core/surefire
 
