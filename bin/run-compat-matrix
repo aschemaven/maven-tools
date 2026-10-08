@@ -21,6 +21,15 @@ set -eu -o pipefail
 #                  exclude-projects.txt), as for run-maven.
 #   MATRIX_GOALS   Maven goals per cell. Default: "-Prun-its clean verify".
 #   MAVEN_PROJECTS_DIR, MAVEN_LRM_SPLIT, flaky/isolated lists: as for run-maven.
+#   MATRIX_YIELD   "false" disables the cooperative yield. Default "true":
+#                  stop between cells once jqa-nightly starts, or once
+#                  .compat-matrix.stop appears, and exit 75 (EX_TEMPFAIL).
+#
+# EXIT STATUS
+#   0   every requested cell was attempted
+#   75  yielded before completing (nightly running, or stop requested); the
+#       caller must NOT treat its change set as consumed
+#   other: a hard failure
 #
 #   Cells are independent; result classification mirrors the upstream matrix:
 #     BUILD SUCCESS -> ok (:white_check_mark:)
@@ -69,6 +78,45 @@ release_lock() {
 trap release_lock EXIT
 trap 'release_lock; exit 143' TERM
 trap 'release_lock; exit 130' INT
+
+# --- cooperative yield ----------------------------------------------------
+# The lock above stops two matrices from overlapping, but not a matrix from
+# overlapping the NIGHTLY: compat-tick yields to a running nightly, yet a
+# matrix that is already in flight when 21:00 comes round keeps the machine.
+# Measured on the night of 2026-10-07: a matrix started 16:55 was still
+# running 16 hours later, and the nightly that began at 21:00 needed 11 hours
+# for a build stage that takes well under one on an idle machine.
+#
+# A cell is independent and idempotent, so stopping BETWEEN cells costs
+# nothing: the cell file is either written or absent, and the next tick
+# rebuilds whatever is missing. That makes yielding the cheap option and
+# killing the matrix unnecessary.
+#
+# .compat-matrix.stop gives the same clean stop on request, which beats "kill"
+# -- a killed run leaves a half-written cell and its lock behind.
+: "${MATRIX_YIELD:=true}"
+yield_marker="${lock}/yielded"
+# Asking the process table, not the nightly's lock directory: that lock has no
+# pid file, so a nightly killed by a signal leaves it behind and the matrix
+# would yield to a job that is not running -- forever.
+nightly_active() {
+  pgrep -f 'bin/jqa-nightly' >/dev/null 2>&1
+}
+should_yield() {
+  [[ "${MATRIX_YIELD}" == "true" ]] || return 1
+  [[ -f "${yield_marker}" ]] && return 0        # decided once, logged once
+  if nightly_active; then
+    : > "${yield_marker}"
+    echo "run-compat-matrix: jqa-nightly is running -- yielding after this cell" >&2
+    return 0
+  fi
+  if [[ -f "${root}/.compat-matrix.stop" ]]; then
+    : > "${yield_marker}"
+    echo "run-compat-matrix: stop requested via .compat-matrix.stop -- yielding after this cell" >&2
+    return 0
+  fi
+  return 1
+}
 
 : "${MATRIX_GOALS:=-Prun-its clean verify}"
 # Optional cell namespace: cells go to variants/<v>/cells/<MATRIX_NS>/<project>.
@@ -152,6 +200,9 @@ build_component_row() {
   local variant v_root i=0 tmp cell_log result btime ts cell_file
   for variant in "${matrix_variants[@]}"; do
     variant_exists "${variant}" || continue
+    # Checked per cell, not per row: a row of eight variants over
+    # core/3.x/its-3 is itself hours of work.
+    if should_yield; then return 0; fi
     v_root="$(variant_root "${variant}")"
     i=$((i + 1))
     tmp=$(mktemp)
@@ -205,8 +256,19 @@ if [[ "${PARALLEL_JOBS}" -gt 1 ]]; then
   run_parallel "${PARALLEL_JOBS}" build_component_row "${matrix_projects[@]}"
 else
   for project in "${matrix_projects[@]}"; do
+    if should_yield; then break; fi
     build_component_row "${project}"
   done
+fi
+
+# EX_TEMPFAIL, deliberately not 0: compat-tick consumes its change set with
+# "mv -f" only after the build round returns, so reporting success here would
+# mark the un-built cells as done and they would never be retried. A non-zero
+# exit leaves the state stale and the next tick picks up where this stopped.
+if [[ -f "${yield_marker}" ]]; then
+  echo "Matrix YIELDED before completing; cells not built this round remain missing." >&2
+  echo "The pending change set is preserved -- the next tick resumes." >&2
+  exit 75
 fi
 
 echo "Matrix complete: ${total} cell(s) written under variants/*/cells/."
