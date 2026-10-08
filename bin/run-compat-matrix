@@ -21,6 +21,9 @@ set -eu -o pipefail
 #                  exclude-projects.txt), as for run-maven.
 #   MATRIX_GOALS   Maven goals per cell. Default: "-Prun-its clean verify".
 #   MAVEN_PROJECTS_DIR, MAVEN_LRM_SPLIT, flaky/isolated lists: as for run-maven.
+#   MATRIX_CELL_TIMEOUT
+#                  Seconds a single cell may run (default 10800 = 3h).
+#                  Per-project overrides in cell-timeouts.txt; 0 = unlimited.
 #   MATRIX_YIELD   "false" disables the cooperative yield. Default "true":
 #                  stop between cells once jqa-nightly starts, or once
 #                  .compat-matrix.stop appears, and exit 75 (EX_TEMPFAIL).
@@ -118,6 +121,12 @@ should_yield() {
   return 1
 }
 
+# One runaway cell must cost one cell, not the window: on 2026-10-07 a single
+# cell ran 14.2 hours while nothing else advanced. 3h is deliberately generous
+# -- the point is to catch a hang, not to trim honest work -- and projects that
+# legitimately need longer are exempted in cell-timeouts.txt (its-3 is).
+: "${MATRIX_CELL_TIMEOUT:=10800}"
+
 : "${MATRIX_GOALS:=-Prun-its clean verify}"
 # Optional cell namespace: cells go to variants/<v>/cells/<MATRIX_NS>/<project>.
 # Used by run-compat-4x (MATRIX_NS=_4x) so worktree-built 4.x lines do not
@@ -212,7 +221,8 @@ build_component_row() {
     # the code. Measured the hard way -- the run ended silently after the
     # header, without even the closing "Matrix complete".
     rc=0
-    VARIANT="${variant}" exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1 || rc=$?
+    VARIANT="${variant}" CELL_TIMEOUT="${MATRIX_CELL_TIMEOUT}" \
+      exec_mvn "${project}" "${task}" "${i}" "${opts}" "${MATRIX_GOALS}" >"${tmp}" 2>&1 || rc=$?
 
     # rc=2 means exec_mvn refused to run: the variant has no Maven of its own
     # and must not borrow the system one. Nothing was executed, so there is no
@@ -226,7 +236,14 @@ build_component_row() {
     fi
 
     cell_log=$(ls -t "${v_root}/logs/${project}"/*.log 2>/dev/null | head -1 || true)
-    result=$(classify_log "${cell_log}")
+    # A timeout is its own result. classify_log would see neither BUILD SUCCESS
+    # nor BUILD FAILURE and call it "warn"/unparseable, which reads like a
+    # broken log rather than "we stopped this cell".
+    if [[ "${EXEC_MVN_TIMED_OUT:-false}" == "true" ]]; then
+      result="timeout"
+    else
+      result=$(classify_log "${cell_log}")
+    fi
     btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

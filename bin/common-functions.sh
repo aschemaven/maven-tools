@@ -220,6 +220,33 @@ variant_field() {
   echo "${val}"
 }
 
+# --- Cell timeouts ---------------------------------------------------------
+# GNU coreutils timeout, under either name. Verified on godestorm (9.11) to
+# kill the whole PROCESS GROUP, which is what matters here: a Maven IT forks
+# mvn -> java -> mvn, and signalling only the direct child would leave the
+# java processes running (we watched six of them linger). setsid is absent on
+# macOS, so relying on timeout's own group handling is the portable route.
+timeout_bin() {
+  local b
+  for b in timeout gtimeout; do
+    if command -v "${b}" >/dev/null 2>&1; then command -v "${b}"; return 0; fi
+  done
+  return 1
+}
+
+# Seconds allowed for one cell of <project>, or "" for unlimited. Returns ""
+# unless the caller opted in via CELL_TIMEOUT, so run-maven and the nightly
+# keep their unlimited behaviour untouched.
+cell_timeout_for() {
+  local project="$1" file="${root}/cell-timeouts.txt" v=""
+  [[ -n "${CELL_TIMEOUT:-}" ]] || { echo ""; return 0; }
+  if [[ -r "${file}" ]]; then
+    v=$(awk -v p="${project}" '$1 == p { print $2; exit }' "${file}" 2>/dev/null)
+  fi
+  [[ -n "${v}" ]] || v="${CELL_TIMEOUT}"
+  printf '%s\n' "${v}"
+}
+
 # --- Version resolution ("auto") -------------------------------------------
 # A SNAPSHOT variant pinned by hand goes stale the moment upstream releases:
 # 3.10.0 shipped, maven-3.10.x moved to 3.10.1-SNAPSHOT, and our pinned
@@ -843,6 +870,21 @@ exec_mvn() {
   local attempt=0
   local current_logs
 
+  # Cell timeout (opt-in via CELL_TIMEOUT; see cell_timeout_for). NOT local --
+  # the caller reads it to classify the cell, and a build failure and a
+  # timeout must not look alike in the matrix.
+  EXEC_MVN_TIMED_OUT=false
+  local _to_secs _to_prefix="" _to_bin
+  _to_secs=$(cell_timeout_for "${project}")
+  if [[ -n "${_to_secs}" && "${_to_secs}" != "0" ]]; then
+    if _to_bin=$(timeout_bin); then
+      # --kill-after: SIGTERM first so Maven can unwind, SIGKILL if it will not.
+      _to_prefix="${_to_bin} --kill-after=60 ${_to_secs}"
+    elif [[ -z "${_TIMEOUT_WARNED:-}" ]]; then
+      _TIMEOUT_WARNED=1
+      echo "WARNING: CELL_TIMEOUT set but no timeout/gtimeout found; cells run unlimited" >&2
+    fi
+  fi
   while :; do
     if [[ ${attempt} -eq 0 ]]; then
       current_logs="${logs}"
@@ -854,9 +896,15 @@ exec_mvn() {
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
       # shellcheck disable=SC2086
-      ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
+      ${_to_prefix} ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
     ) > "${current_logs}"
     status="${?}"
+    # 124 is timeout's "the command outlived its budget".
+    if [[ ${status} -eq 124 && -n "${_to_prefix}" ]]; then
+      EXEC_MVN_TIMED_OUT=true
+      echo "--- maven-tools: cell exceeded ${_to_secs}s and was terminated ---" >> "${current_logs}"
+      break    # no retry: a retry would spend the same budget on the same hang
+    fi
     [[ ${status} -eq 0 ]] && break
     [[ ${attempt} -ge ${max_retries} ]] && break
     attempt=$((attempt + 1))
@@ -877,10 +925,12 @@ exec_mvn() {
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date '+%F %T')" "${task}" "${project}" "${_elapsed}" \
-    "$([[ ${status} -eq 0 ]] && echo ok || echo failed)" "${_load:-}" "${variant:-}" \
+    "$(if [[ ${status} -eq 0 ]]; then echo ok; elif ${EXEC_MVN_TIMED_OUT}; then echo timeout; else echo failed; fi)" "${_load:-}" "${variant:-}" \
     >> "${_timings}"
 
-  if test ${status} -ne 0; then
+  if ${EXEC_MVN_TIMED_OUT}; then
+    echo "TIMED OUT after ${_to_secs}s${ext} [${_elapsed}s]"
+  elif test ${status} -ne 0; then
     echo "failed${retry_tag}${ext} [${_elapsed}s]"
     test "${PREVIEW_LOGLINES:-0}" -gt 0 && tail -"${PREVIEW_LOGLINES}" "${current_logs}"
     if eval "${FAIL_FAST:-false}"; then

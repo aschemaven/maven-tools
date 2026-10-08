@@ -1,0 +1,15 @@
+# Per-project cell timeout for the compatibility matrix, in seconds.
+#
+#   <project path>   <seconds>      # 0 = no limit
+#
+# Only consulted when a caller sets CELL_TIMEOUT (run-compat-matrix does, from
+# MATRIX_CELL_TIMEOUT). A project listed here overrides that default.
+#
+# Why a limit at all: on 2026-10-07 a single cell ran for 14.2 hours while the
+# matrix made no other progress, and the whole run was still unfinished a day
+# later. One runaway cell must cost one cell, not the window.
+#
+# Why its-3 is exempt: the core integration-test suite legitimately needs
+# hours (measured 2790s to 51159s across variants). Capping it would discard
+# the result we actually want instead of saving time.
+core/3.x/its-3   0

@@ -14,7 +14,8 @@ set -eu -o pipefail
 #   only result files, so it can run on any machine over merged/synced cells.
 #
 #   Icons mirror the upstream plugins-maven4.md matrix:
-#     ok -> :white_check_mark:   fail -> :x:   warn -> :warning:   missing -> —
+#     ok -> :white_check_mark:   fail -> :x:   warn -> :warning:
+#     timeout -> :hourglass:     missing -> —
 
 # Resolve the tools-repo root without sourcing common-functions (no side
 # effects, no project.list read needed here). readlink -f (not cd/pwd) so a
@@ -54,6 +55,7 @@ icon() {
     ok)   echo ':white_check_mark:' ;;
     fail) echo ':x:' ;;
     warn) echo ':warning:' ;;
+    timeout) echo ':hourglass:' ;;
     *)    echo '—' ;;
   esac
 }
@@ -113,7 +115,7 @@ done
   else
     emit_table "Manifest lines (3.x / GA)" "${main_list}"
     emit_table "4.x-native lines" "${fourx_list}"
-    echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :warning: unparseable · — no result yet."
+    echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :hourglass: cell timeout · :warning: unparseable · — no result yet."
     echo
     echo "Variants:"
     for v in "${variants[@]}"; do
