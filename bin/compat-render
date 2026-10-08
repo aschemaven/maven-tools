@@ -15,7 +15,7 @@ set -eu -o pipefail
 #
 #   Icons mirror the upstream plugins-maven4.md matrix:
 #     ok -> :white_check_mark:   fail -> :x:   warn -> :warning:
-#     timeout -> :hourglass:     missing -> —
+#     timeout -> :hourglass:     excluded -> :no_entry_sign:    missing -> —
 
 # Resolve the tools-repo root without sourcing common-functions (no side
 # effects, no project.list read needed here). readlink -f (not cd/pwd) so a
@@ -50,12 +50,29 @@ done < <(
   done | sort -u
 )
 
+# Variant restriction, read locally. compat-render is deliberately
+# standalone -- it sets its own root and sources nothing -- so it carries its
+# own reader rather than pulling in common-functions.sh for one lookup. (An
+# earlier version called the shared helper; being undefined here, it failed
+# with 127 and "! <failure>" marked EVERY cell excluded.)
+render_allows_variant() {
+  local project="$1" variant="$2" allowed
+  [[ -r "${root}/project-variants.txt" ]] || return 0
+  allowed=$(awk -v p="${project}" '
+    $1 == p { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }
+  ' "${root}/project-variants.txt" 2>/dev/null)
+  [[ -z "${allowed// /}" ]] && return 0
+  case " ${allowed} " in *" ${variant} "*) return 0 ;; esac
+  return 1
+}
+
 icon() {
   case "$1" in
     ok)   echo ':white_check_mark:' ;;
     fail) echo ':x:' ;;
     warn) echo ':warning:' ;;
     timeout) echo ':hourglass:' ;;
+    excluded) echo ':no_entry_sign:' ;;
     *)    echo '—' ;;
   esac
 }
@@ -86,7 +103,12 @@ emit_table() {
     printf '| `%s` |' "${p#_4x/}"
     for v in "${variants[@]}"; do
       f="${root}/variants/${v}/cells/${p}.json"
-      if [[ -r "${f}" ]]; then
+      # A project restricted away from this variant has no cell and never will.
+      # Showing it as "no result yet" would read as a gap in the data; it is a
+      # deliberate exclusion (see project-variants.txt).
+      if ! render_allows_variant "${p#_4x/}" "${v}"; then
+        printf ' %s |' "$(icon excluded)"
+      elif [[ -r "${f}" ]]; then
         st=$(jq -r '.status // "warn"' "${f}")
         tm=$(jq -r '.time // ""' "${f}")
         printf ' %s %s |' "$(icon "${st}")" "${tm}"
@@ -115,7 +137,7 @@ done
   else
     emit_table "Manifest lines (3.x / GA)" "${main_list}"
     emit_table "4.x-native lines" "${fourx_list}"
-    echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :hourglass: cell timeout · :warning: unparseable · — no result yet."
+    echo "Legend: :white_check_mark: BUILD SUCCESS · :x: BUILD FAILURE · :hourglass: cell timeout · :warning: unparseable · :no_entry_sign: not run for this variant (project-variants.txt) · — no result yet."
     echo
     echo "Variants:"
     for v in "${variants[@]}"; do

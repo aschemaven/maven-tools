@@ -1,0 +1,28 @@
+# Restrict a project to specific matrix variants.
+#
+#   <project path>   <variant> [<variant> ...]
+#
+# Without an entry a project runs against every variant, which is the right
+# default: a component should be tested on everything we track.
+#
+# core/3.x/its-3 is the exception. It is the Maven 3.x integration-test suite,
+# and its HEAD tracks maven-3.10.x ("Fix IT failures caused by Maven 3.10.0
+# stricter validation level"). Running it against the Maven 4 columns is wrong
+# three times over:
+#
+#   * Redundant. Maven 4 ships its own ITs as core/maven/its and
+#     core/maven-4.0.x/its, declared as <module>its</module> and built with
+#     those projects. The standalone suite (core/its) was emptied in 2025 when
+#     the tests moved into core -- it holds nothing but a README now.
+#   * Broken. The 3.x harness drives Maven through maven-shared-verifier's
+#     Embedded3xLauncher, which calls MavenCli.doMain; Maven 4's entry point is
+#     MavenCling. One m4-40x log carries 868 such errors -- harness noise, not
+#     a finding about Maven.
+#   * Ruinous. The two most expensive cells ever recorded here are 4.x x its-3:
+#     51159s (14.2h) and 9849s. Together about 17h of every full matrix pass,
+#     spent on the above.
+#
+# m3-9 is left out as well: the suite has been adapted to 3.10's stricter
+# validation, so against 3.9.16 it measures suite-versus-version drift rather
+# than Maven. Add it back if the 3.9 line is to be covered deliberately.
+core/3.x/its-3   m3-10 m3-10x

@@ -220,6 +220,26 @@ variant_field() {
   echo "${val}"
 }
 
+# --- Per-project variant restriction ---------------------------------------
+# Variants a project may run against, or "" for "all of them". See
+# project-variants.txt for why core/3.x/its-3 is restricted.
+project_variants_for() {
+  local project="$1" file="${root}/project-variants.txt"
+  [[ -r "${file}" ]] || { echo ""; return 0; }
+  awk -v p="${project}" '
+    $1 == p { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }
+  ' "${file}" 2>/dev/null
+}
+
+# True when <variant> may run <project>.
+project_allows_variant() {
+  local project="$1" variant="$2" allowed
+  allowed=$(project_variants_for "${project}")
+  [[ -z "${allowed// /}" ]] && return 0        # unrestricted
+  case " ${allowed} " in *" ${variant} "*) return 0 ;; esac
+  return 1
+}
+
 # --- Cell timeouts ---------------------------------------------------------
 # GNU coreutils timeout, under either name. Verified on godestorm (9.11) to
 # kill the whole PROCESS GROUP, which is what matters here: a Maven IT forks
