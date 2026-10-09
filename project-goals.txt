@@ -1,0 +1,18 @@
+# Per-project Maven goals for the compatibility matrix, replacing MATRIX_GOALS.
+# Format: <project> <goal...>
+# Comments starting with `#` and blank lines are ignored.
+#
+# The matrix default is `-Prun-its clean verify`, which is right for a plugin:
+# verify runs its ITs without pushing anything into a repository. It is wrong
+# for the Maven core IT suites, whose ITs resolve reactor modules as ordinary
+# dependencies -- maven-it-plugin-bootstrap is built by its/core-it-support and
+# declared as a dependency of core-it-suite, and `verify` never installs it, so
+# every IT dies on
+#   Could not find artifact org.apache.maven.its:maven-it-plugin-bootstrap:jar
+# Measured on core/maven-4.0.x: `clean verify` fails, `clean install` passes
+# (MavenITBootstrapTest 1/0) with nothing else changed. Upstream builds it the
+# same way -- its/README.md documents `mvn clean install -Prun-its` and the
+# project's own GitHub workflow runs `./mvnw install -Prun-its`.
+core/maven-4.0.x   -Prun-its clean install
+core/maven         -Prun-its clean install
+core/3.x/maven-3   -Prun-its clean install
