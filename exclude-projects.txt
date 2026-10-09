@@ -9,6 +9,10 @@
 studies/consumer-pom
 studies/maven-eventsound-extension
 studies/maven-extension-demo
+# Our own CI-extension study: 4 tests, 4 errors in every column, and nothing
+# upstream depends on it. It was the only "studies" project still in the
+# survey, so it contributed red cells that say nothing about Maven.
+studies/maven-ci-extension
 
 # Legacy SVN-imported tool with stale 1.0-SNAPSHOT dependency.
 svn/repository-tools
