@@ -252,6 +252,44 @@ if [[ -r "${mx}" ]]; then
   fi
   rm -f "${cur}"
 
+  # --- Upstream CI --------------------------------------------------------
+  # Written by bin/ci-status (the nightly runs it; this only reads the file).
+  # Only problems are listed: 89 of 124 components are green and saying so
+  # line by line would bury the rest.
+  #
+  # The point of the section is to tell "upstream is broken" apart from "we
+  # broke it". A red matrix cell for a component whose own CI is red on the
+  # very commit we checked out is not our homework -- measured on 2026-10-09,
+  # nine components were in exactly that state.
+  ci="${state_dir}/ci-status.tsv"
+  if [[ -r "${ci}" ]]; then
+    printf '\n== Upstream CI ==\n'
+    awk -F'\t' -v stale="${CI_STATUS_STALE_DAYS:-30}" -v today="$(date -u +%s)" '
+      NR == 1 { next }
+      {
+        proj=$1; branch=$3; concl=$5; when=$6; runsha=$7; oursha=$8
+        total++
+        if (concl == "success") { ok++; next }
+        if (concl == "no-ci")   { noci[++nn] = sprintf("    %-44s (no workflow, no Jenkinsfile)", proj); next }
+        if (concl == "jenkins") { jen++; next }
+        if (concl == "no-run")  { norun[++nr] = sprintf("    %-44s %s", proj, branch); next }
+        if (concl == "no-repo" || concl == "unknown") { unk++; next }
+        # failure, cancelled, timed_out, ...
+        mark = (runsha == oursha && runsha != "-") ? "  <- the commit we build" : ""
+        bad[++nb] = sprintf("    %-44s %-20s %-10s %s%s", proj, branch, concl, substr(when, 1, 10), mark)
+      }
+      END {
+        printf "  %d component(s): %d green", total, ok
+        if (jen) printf ", %d Jenkins-only (not queried)", jen
+        if (unk) printf ", %d unknown", unk
+        printf "\n"
+        if (nb) { printf "\n  FAILING upstream:\n"; for (i=1;i<=nb;i++) print bad[i] }
+        if (nn) { printf "\n  No CI at all -- worth chasing:\n"; for (i=1;i<=nn;i++) print noci[i] }
+        if (nr) { printf "\n  Build workflow exists but no run found:\n"; for (i=1;i<=nr;i++) print norun[i] }
+        if (!nb && !nn && !nr) print "  no upstream CI problems"
+      }' "${ci}"
+  fi
+
   dr="${root}/reports/compat-drift.md"
   if [[ -r "${dr}" ]]; then
     printf '\n  Drift vs the upstream table:\n'

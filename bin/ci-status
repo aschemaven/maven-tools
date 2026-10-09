@@ -1,0 +1,172 @@
+#!/bin/bash
+
+set -u -o pipefail
+
+# ci-status - record each component's UPSTREAM CI result for the branch we build.
+#
+# WHY
+#     A red cell in our matrix can mean two very different things: our harness
+#     broke the build, or upstream is simply red right now. Without that
+#     distinction every red cell looks like homework. Measured on 2026-10-09:
+#     apache/maven-archiver was failing on maven-archiver-3.x -- the branch our
+#     checkout tracks -- with the very commit we had checked out, while our own
+#     nightly also reported shared/archiver as failed. One API call separates
+#     "upstream is broken" from "we broke it".
+#
+#     It also finds components with no CI at all, which is worth chasing on its
+#     own: shared/shared-incremental and shared/shared-io have neither a
+#     workflow nor a Jenkinsfile.
+#
+# WHAT IT AVOIDS
+#     Two traps, both measured:
+#       * "the latest workflow run" is usually NOT the build. For
+#         maven-compiler-plugin it was the stale-issue bot, conclusion
+#         "skipped". Bot workflows are excluded by name and the build workflow
+#         is resolved explicitly (it is maven-verify.yml across the Maven
+#         repositories, not the maven.yml one might guess).
+#       * the owner is not always "apache": the plexus components live under
+#         codehaus-plexus. Owner and repo come from the component's own remote.
+#       * the branch matters. Our checkouts do not all track master --
+#         shared/archiver tracks maven-archiver-3.x -- and reporting master's
+#         status for a branch we do not build would be a lie.
+#
+# OUTPUT
+#     var/ci-status.tsv:
+#       project <TAB> repo <TAB> branch <TAB> workflow <TAB> conclusion
+#               <TAB> run_date <TAB> run_sha <TAB> our_sha <TAB> url
+#     conclusion is a GitHub conclusion, or one of:
+#       no-ci      no workflow and no Jenkinsfile in the tree
+#       jenkins    Jenkinsfile only (ASF Jenkins is not queried yet)
+#       no-run     a build workflow exists but no run was found for the branch
+#                  (or, for a detached checkout, for the commit) we build
+#       no-repo    no GitHub remote
+#       unknown    the query failed (offline, rate limit, private repo)
+#
+# SYNOPSIS
+#     ci-status [<project> ...]      # default: every project in PROJECTS
+
+dir=$(dirname "${0}")
+# shellcheck source=common-functions.sh
+source "${dir}/common-functions.sh"
+
+state_dir="${root}/var"; mkdir -p "${state_dir}"
+out="${state_dir}/ci-status.tsv"
+wf_cache="${state_dir}/ci-workflows.tsv"
+projects_dir="${root}/${MAVEN_PROJECTS_DIR:-maven}"
+: "${CI_STATUS_STALE_DAYS:=30}"
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "ci-status: gh not found; cannot query GitHub" >&2
+  exit 0
+fi
+
+wanted="${*:-}"
+if [[ -n "${wanted// /}" ]]; then
+  targets="${wanted}"
+else
+  targets="${PROJECTS}"
+fi
+
+# Workflows whose runs are never the build. Without this the report shows the
+# stale-issue bot's "skipped" as the component's build status.
+bot_re='stale|dependabot|release-drafter|pr-automation|copilot|label|greeting|codeql'
+
+# The build workflow for <repo>, cached: it changes far less often than its
+# runs do, and discovery costs an extra API call per component.
+resolve_workflow() {
+  local repo="$1" cached
+  if [[ -r "${wf_cache}" ]]; then
+    cached=$(awk -F'\t' -v r="${repo}" '$1 == r { print $2; exit }' "${wf_cache}" 2>/dev/null)
+    [[ -n "${cached}" ]] && { printf '%s\n' "${cached}"; return 0; }
+  fi
+  local paths wf=""
+  paths=$(gh api "repos/${repo}/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.state=="active") | .path' 2>/dev/null) || paths=""
+  [[ -n "${paths}" ]] || return 1
+  # Ranked, so a repository with several candidates still yields the build one.
+  local pat
+  for pat in 'maven-verify\.yml$' 'maven\.yml$' 'verify\.yml$' 'build\.yml$' 'ci\.yml$'; do
+    wf=$(printf '%s\n' "${paths}" | grep -vE "${bot_re}" | grep -E "${pat}" | head -1)
+    [[ -n "${wf}" ]] && break
+  done
+  # Last resort: the first non-bot workflow at all.
+  [[ -n "${wf}" ]] || wf=$(printf '%s\n' "${paths}" | grep -vE "${bot_re}" | head -1)
+  [[ -n "${wf}" ]] || return 1
+  wf="${wf##*/}"
+  printf '%s\t%s\n' "${repo}" "${wf}" >> "${wf_cache}"
+  printf '%s\n' "${wf}"
+}
+
+printf 'project\trepo\tbranch\tworkflow\tconclusion\trun_date\trun_sha\tour_sha\turl\n' > "${out}.$$"
+n=0
+for project in ${targets}; do
+  pd="${projects_dir}/${project}"
+  [[ -e "${pd}/.git" ]] || continue
+  n=$((n + 1))
+
+  # NOT necessarily "origin": the repo tool names each remote after the
+  # manifest's remote definition, so the plexus components carry a remote
+  # called "plexus". Prefer origin when it exists, else take the first one.
+  remote=$(git -C "${pd}" remote get-url origin 2>/dev/null || echo "")
+  if [[ -z "${remote}" ]]; then
+    _rn=$(git -C "${pd}" remote 2>/dev/null | head -1)
+    [[ -n "${_rn}" ]] && remote=$(git -C "${pd}" remote get-url "${_rn}" 2>/dev/null || echo "")
+  fi
+  branch=$(git -C "${pd}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  our_sha=$(git -C "${pd}" rev-parse HEAD 2>/dev/null || echo "")
+  our_sha="${our_sha:0:8}"
+
+  # github.com/<owner>/<repo>(.git), ssh or https
+  repo=$(printf '%s' "${remote}" \
+    | sed -E 's#^(https://|git@)github\.com[:/]##; s#\.git$##')
+  if [[ -z "${repo}" || "${repo}" == "${remote}" ]]; then
+    printf '%s\t%s\t%s\t-\tno-repo\t-\t-\t%s\t-\n' "${project}" "${remote:--}" "${branch:--}" "${our_sha:--}" >> "${out}.$$"
+    continue
+  fi
+
+  has_wf=false; has_jf=false
+  [[ -n "$(find "${pd}/.github/workflows" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | head -1)" ]] && has_wf=true
+  [[ -f "${pd}/Jenkinsfile" ]] && has_jf=true
+
+  if ! ${has_wf}; then
+    if ${has_jf}; then
+      printf '%s\t%s\t%s\t-\tjenkins\t-\t-\t%s\t-\n' "${project}" "${repo}" "${branch}" "${our_sha}" >> "${out}.$$"
+    else
+      printf '%s\t%s\t%s\t-\tno-ci\t-\t-\t%s\t-\n' "${project}" "${repo}" "${branch}" "${our_sha}" >> "${out}.$$"
+    fi
+    continue
+  fi
+
+  wf=$(resolve_workflow "${repo}") || wf=""
+  if [[ -z "${wf}" ]]; then
+    printf '%s\t%s\t%s\t-\tunknown\t-\t-\t%s\t-\n' "${project}" "${repo}" "${branch}" "${our_sha}" >> "${out}.$$"
+    continue
+  fi
+
+  # The branch WE build, and push events only: a pull_request run says nothing
+  # about the state of the branch itself.
+  #
+  # A detached checkout has no branch to query -- "git rev-parse --abbrev-ref"
+  # yields the literal "HEAD" -- and asking for branch=HEAD returns nothing,
+  # which would be reported as "never ran". Five components are detached, so
+  # that would have been five false alarms. Ask by commit instead; that is
+  # also the more precise question, since it is the commit we actually build.
+  if [[ "${branch}" == "HEAD" || -z "${branch}" ]]; then
+    full_sha=$(git -C "${pd}" rev-parse HEAD 2>/dev/null || echo "")
+    run=$(gh api "repos/${repo}/actions/workflows/${wf}/runs?per_page=1&head_sha=${full_sha}" \
+            --jq '.workflow_runs[0] | [(.conclusion // .status), .created_at, .head_sha[0:8], .html_url] | @tsv' 2>/dev/null) || run=""
+    branch="detached"
+  else
+    run=$(gh api "repos/${repo}/actions/workflows/${wf}/runs?per_page=1&event=push&branch=${branch}" \
+            --jq '.workflow_runs[0] | [(.conclusion // .status), .created_at, .head_sha[0:8], .html_url] | @tsv' 2>/dev/null) || run=""
+  fi
+  if [[ -z "${run}" || "${run}" == $'\t\t\t' ]]; then
+    printf '%s\t%s\t%s\t%s\tno-run\t-\t-\t%s\t-\n' "${project}" "${repo}" "${branch}" "${wf}" "${our_sha}" >> "${out}.$$"
+    continue
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${project}" "${repo}" "${branch}" "${wf}" "${run}" "${our_sha}" \
+    | awk -F'\t' 'BEGIN{OFS="\t"} { print $1,$2,$3,$4,$5,$6,$7,$9,$8 }' >> "${out}.$$"
+done
+
+mv -f "${out}.$$" "${out}"
+echo "ci-status: ${n} component(s) -> ${out#"${root}"/}"

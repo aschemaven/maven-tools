@@ -703,6 +703,22 @@ if [[ "${PUBLISH:-true}" == "true" ]]; then
   fi
 fi
 
+# --- 4c. upstream CI state ------------------------------------------------
+# Recorded before the summary reads it. About 100 seconds for 124 components,
+# two API calls each against a 5000/hour budget.
+#
+# This is what separates "upstream is red" from "our harness broke it". A red
+# matrix cell for a component whose own CI fails on the very commit we checked
+# out is not our homework -- measured on 2026-10-09, nine components were in
+# exactly that state, shared/archiver and shared-4/archiver among them.
+#
+# Non-fatal by design: no gh, no token or no network must never fail a night.
+if [[ -x "${dir}/ci-status" ]]; then
+  echo "[$(stamp)] recording upstream CI state"
+  "${dir}/ci-status" >/dev/null 2>&1 \
+    || echo "[$(stamp)] ci-status failed -- the upstream CI section will be stale" >&2
+fi
+
 # --- 5. verify coverage against the GitHub API ----------------------------
 # Runs against the published database -- normally the store just promoted, and
 # with --incremental the database that was just written.
