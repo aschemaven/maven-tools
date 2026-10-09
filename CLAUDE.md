@@ -104,3 +104,33 @@ GitHub Actions workflow (`.github/workflows/maven-repo-reactor-build.yml`):
 - Scheduled nightly builds on main branch
 - Manual trigger with branch selection
 - Uploads build logs and jQAssistant store as artifacts
+
+## Before triaging a red matrix cell: read the queue
+
+`~/wrk/maven/maven-bugfixing/` holds the analysis backlog, and much of it is
+about components this harness builds. Several entries carry a `Component::`
+field naming the project path, so a red cell can be matched to an existing
+analysis directly:
+
+```bash
+grep -rl "Component:: .core/3.x/its-3" ~/wrk/maven/maven-bugfixing/{queue,plans,in-progress,waiting}
+grep -ril "<keyword>"                  ~/wrk/maven/maven-bugfixing/queue
+```
+
+This is not optional diligence. On 2026-10-09 a day went into re-deriving a
+root cause that `queue/workspace-split-lrm-localprefix.adoc` had analysed on
+2026-06-09, down to the refuted intermediate hypothesis — the split local
+repository layout leaking into forked integration tests. The queue even
+recorded which obvious countermeasure does *not* work. Four parallel agents
+reproduced it from scratch instead.
+
+Two entries that explain recurring red cells, as examples of what is in there:
+
+| Entry | Explains |
+|---|---|
+| `queue/workspace-split-lrm-localprefix.adoc` | fork/outer disagreement on local-repo layout |
+| `queue/m4-shared-verifier-mavencling.adoc` | `core/3.x/its-3` against every Maven 4 column |
+
+Entries whose `Repository::` names a repo with several checkouts here (`apache/maven`
+has three: `core/3.x/maven-3`, `core/maven`, `core/maven-4.0.x`) carry no
+`Component::` field yet — those need a judgement call, so search by keyword.
