@@ -209,13 +209,59 @@ notify_failure() {
 # One mail per run, whatever the outcome. Previously a successful night said
 # nothing at all, so there was no way to tell whether the nightly was doing
 # useful work; and a failure said only which stage broke.
+# Sent as multipart/alternative: a coloured matrix for a reader that renders
+# HTML, the full plain text for one that does not. The table exists because the
+# text form could not answer "what moved" at a glance -- it listed transitions
+# line by line, dozens of them after an invalidation, with a failure of weeks
+# reading exactly like one from last night.
+#
+# The HTML part renders from var/nightly-summary-cells.tsv, which
+# nightly-summary has just written. Reading that state instead of re-parsing
+# keeps the two parts from disagreeing and advances the snapshot exactly once.
 notify_summary() {
   local logdir="$1" result="$2"
   [[ -n "${NIGHTLY_MAIL}" ]] || return 0
-  command -v mail >/dev/null 2>&1 || return 0
   [[ -x "${dir}/nightly-summary" ]] || return 0
-  "${dir}/nightly-summary" "${logdir}" 2>/dev/null \
-    | mail -s "jQA nightly ${result}: $(hostname -s)" "${NIGHTLY_MAIL}" 2>/dev/null || true
+  local subject="jQA nightly ${result}: $(hostname -s)"
+  local txt html boundary
+  txt=$(mktemp) || return 0
+  html=$(mktemp) || { rm -f "${txt}"; return 0; }
+  # --advance: this is the real nightly, so the failure streaks move on.
+  "${dir}/nightly-summary" "${logdir}" --advance > "${txt}" 2>/dev/null || true
+  if [[ -x "${dir}/nightly-summary-html" ]]; then
+    "${dir}/nightly-summary-html" "Compatibility matrix -- $(hostname -s)" > "${html}" 2>/dev/null || : > "${html}"
+  else
+    : > "${html}"
+  fi
+  # Overridable so the message can be captured and checked instead of sent.
+  local sm="${SENDMAIL_BIN:-/usr/sbin/sendmail}"
+  if [[ -s "${html}" && -x "${sm}" ]]; then
+    boundary="nsum-$$-$(date +%s)"
+    {
+      printf 'To: %s\n' "${NIGHTLY_MAIL}"
+      printf 'Subject: %s\n' "${subject}"
+      printf 'MIME-Version: 1.0\n'
+      printf 'Content-Type: multipart/alternative; boundary="%s"\n\n' "${boundary}"
+      printf -- '--%s\n' "${boundary}"
+      printf 'Content-Type: text/plain; charset=UTF-8\n\n'
+      cat "${txt}"
+      printf '\n--%s\n' "${boundary}"
+      printf 'Content-Type: text/html; charset=UTF-8\n\n'
+      printf '<html><body>\n'
+      cat "${html}"
+      # The text part goes in too, below the table: the table answers "what
+      # moved", the detail answers "why", and an HTML reader would otherwise
+      # never see the stage timings, repo changes and disk figures.
+      printf '<hr style="border:0;border-top:1px solid #dadce0;margin:16px 0">\n'
+      printf '<pre style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#3c4043;white-space:pre-wrap">\n'
+      sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "${txt}"
+      printf '</pre>\n</body></html>\n'
+      printf '\n--%s--\n' "${boundary}"
+    } | "${sm}" -t 2>/dev/null || true
+  elif command -v mail >/dev/null 2>&1; then
+    mail -s "${subject}" "${NIGHTLY_MAIL}" < "${txt}" 2>/dev/null || true
+  fi
+  rm -f "${txt}" "${html}"
 }
 
 finish() {
