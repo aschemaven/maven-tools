@@ -549,6 +549,35 @@ if [[ "${MAVEN_LRM_SPLIT:-true}" == "true" ]]; then
   fi
 fi
 
+# --- Develocity: off in the harness -----------------------------------------
+# Forced off even when the environment says otherwise -- USE_DEVELOCITY=true
+# is exported from the login profile, and the extension has broken our builds
+# three different ways in a single day:
+#
+#   * 1.23 reflected on SurefireMojo#generateTestClasspath, a signature that
+#     surefire 3.6.0 dropped, and killed the Maven core builds outright. That
+#     one 2.6.0 fixes.
+#   * "Internal error ... junitPlatformArtifact is null" on surefire's own
+#     build. Measured version-independently: 1.23 and 2.6.0 behave the same,
+#     while mimir alone produces zero such errors.
+#   * "Internal error ... event METADATA_RESOLVED
+#     eu.maveniverse.maven.mimir:daemon-slim" inside FORKED integration-test
+#     builds, which aborts the outer build AFTER its tests have already
+#     passed. Measured on maven-gpg-plugin: with Develocity the cell fails,
+#     without it the very same cell is ok -- 13 of 13 ITs green and 85
+#     signatures actually produced.
+#
+# We do not read the build scans here, so the extension is pure cost. Filed in
+# maven-bugfixing/queue; HARNESS_DEVELOCITY=true opts back in, which is exactly
+# what reproducing those defects needs.
+if [[ "${HARNESS_DEVELOCITY:-false}" != "true" ]]; then
+  if [[ "${USE_DEVELOCITY:-false}" == "true" ]]; then
+    echo "NOTE: Develocity disabled by the harness (HARNESS_DEVELOCITY=true re-enables it)" >&2
+  fi
+  USE_DEVELOCITY=false
+fi
+export USE_DEVELOCITY
+
 # List workspace pollution for a single project on stdout (one item per line,
 # path relative to the project directory).
 #
