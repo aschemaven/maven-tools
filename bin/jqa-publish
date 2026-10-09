@@ -60,7 +60,12 @@ stamp() { date '+%F %T'; }
 
 init_layout() {
   mkdir -p "${base}/blue/data" "${base}/green/data"
-  [[ -L "${current}" ]] || ln -sfn "${base}/blue" "${current}"
+  # RELATIVE, deliberately. An absolute "current" breaks the moment the tool
+  # root moves: after relocating the automation from a feature worktree into
+  # the main checkout, current still named the old path, the serving
+  # container's bind mount dangled, and a restart would have failed. A
+  # relative link lives inside ${base} and moves with it.
+  [[ -L "${current}" ]] || ln -sfn "blue" "${current}"
 }
 
 active_slot() { basename "$(readlink "${current}")"; }
@@ -102,10 +107,39 @@ cmd_verify() {
   echo "[$(stamp)] slot ${slot} verified: ${n} nodes"
 }
 
+# Recreate the serving container for the slot that is ALREADY current, without
+# switching. cmd_switch always flips to the passive slot, so it was the wrong
+# tool for "the container needs recreating" -- after a host reboot, or after
+# the tool root moved and the bind mount went stale. Using switch for that
+# would quietly start serving the older graph.
+cmd_serve() {
+  init_layout
+  local slot; slot=$(active_slot)
+  echo "[$(stamp)] re-serving current slot ${slot}"
+  docker rm -f "${container}" >/dev/null 2>&1
+  docker run -d --name "${container}" \
+    --restart unless-stopped \
+    -p "${PUBLISH_HTTP_PORT}:7474" -p "${PUBLISH_BOLT_PORT}:7687" \
+    -e NEO4J_AUTH=none \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_server_databases_default__to__read__only=true \
+    -e NEO4J_server_memory_heap_max__size="${PUBLISH_HEAP}" \
+    -v "${current}/data:/data" \
+    "${NEO4J_IMAGE}" >/dev/null || die "docker run failed"
+  local i
+  for i in $(seq 1 60); do
+    if docker exec "${container}" cypher-shell -a bolt://localhost:7687 "RETURN 1" >/dev/null 2>&1; then
+      echo "[$(stamp)] published on bolt://localhost:${PUBLISH_BOLT_PORT} (nach ~$((i*2))s)"; return 0
+    fi
+    sleep 2
+  done
+  die "published instance did not become ready"
+}
+
 cmd_switch() {
   init_layout
   local slot; slot=$(passive_slot)
-  ln -sfn "${base}/${slot}" "${current}"
+  ln -sfn "${slot}" "${current}"
   echo "[$(stamp)] current -> ${slot}"
   # RECREATE, not restart -- see the header.
   docker rm -f "${container}" >/dev/null 2>&1
@@ -149,6 +183,7 @@ case "${1:-status}" in
   stage)  shift; cmd_stage "${1:-}" ;;
   verify) shift; cmd_verify "${1:-}" ;;
   switch) cmd_switch ;;
+  serve)  cmd_serve ;;
   run)    shift; src="${1:-}"; cmd_stage "${src}" && cmd_verify && cmd_switch ;;
   status) cmd_status ;;
   stop)   docker rm -f "${container}" >/dev/null 2>&1 && echo stopped || echo "was not running" ;;
