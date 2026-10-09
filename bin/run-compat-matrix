@@ -41,6 +41,38 @@ set -eu -o pipefail
 #     BUILD FAILURE -> fail (:x:)
 #     otherwise     -> warn (:warning:)
 
+# No Enhanced-LRM split for matrix cells. Set BEFORE sourcing, because
+# common-functions.sh builds MAVEN_OPTS at source time.
+#
+# The split itself is useful and stays on for the nightly: it keeps our locally
+# installed SNAPSHOTs out of the downloaded artefacts in the shared .m2. The
+# nightly builds with "clean install" and never activates run-its, so nothing
+# there forks a Maven.
+#
+# The matrix does activate run-its, and that is where it breaks. An IT forks
+# its own Maven against a local repository the IT itself owns -- invoker's
+# target/local-repo, a checked-in fixture repo, core-it-suite's prepared user
+# home -- and outer and inner build must then agree on that repository's
+# LAYOUT. They do not, because we exported the split through MAVEN_OPTS:
+#   * maven-invoker-plugin REPLACES MAVEN_OPTS when an IT sets mavenOpts
+#     (MavenCommandLineBuilder:194), so the fork loses the split while
+#     invoker:install wrote split -> "Could not find artifact <plugin>:jar".
+#     Ten matrix projects set mavenOpts.
+#   * maven-ear-plugin ships a FLAT fixture repository, so a fork that keeps
+#     the split looks under m2repo/{installed,cached}/ and finds nothing.
+#   * enforcer's corrupted-jar IT poisons cached/releases/ while its cleanup
+#     only removes the flat copy, so the poison survives into later ITs.
+#   * core-it-suite excludes MAVEN_OPTS from its forks outright.
+# Four independent A/B measurements, one variable each: split off turned
+# plexus/components/compiler into 12/0, enforcer into 4/0, maven-ear-plugin
+# into 5/5 and core/maven-4.0.x (with install) into 1/0.
+#
+# The variant repositories are per-variant and disposable, so there is nothing
+# here for the split to keep apart in the first place. Set MAVEN_LRM_SPLIT=true
+# to run a matrix deliberately against split behaviour.
+: "${MAVEN_LRM_SPLIT:=false}"
+export MAVEN_LRM_SPLIT
+
 dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
 
