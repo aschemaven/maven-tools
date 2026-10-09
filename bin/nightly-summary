@@ -180,7 +180,22 @@ if [[ -r "${mx}" ]]; then
   ' "${cur}" > "${cells}.$$" 2>/dev/null || true
   mkdir -p "${state_dir}" && mv -f "${cells}.$$" "${cells}" 2>/dev/null || true
 
-  if [[ -r "${snap}" ]]; then
+  # A snapshot from before the variant-name key held column INDICES in field
+  # 2. Comparing the two would pit "1".."6" against variant names: nothing
+  # matches, so the drift section would claim "every cell holds its previous
+  # state" (nothing was comparable, which is not the same thing) and then list
+  # "Variants removed: 1 2 3 4 5 6". Say what actually happened instead.
+  snap_is_legacy=false
+  if [[ -r "${snap}" ]] \
+     && awk -F'\t' '{ tot++; if ($2 != "" && $2 + 0 == $2) num++ } END { exit !(tot > 0 && num == tot) }' "${snap}"; then
+    snap_is_legacy=true
+  fi
+
+  if [[ "${snap_is_legacy}" == "true" ]]; then
+    printf '\n  Drift since the previous summary:\n'
+    printf '    not comparable -- the previous snapshot was keyed by column index,\n'
+    printf '    this one by variant name. This run becomes the new baseline.\n'
+  elif [[ -r "${snap}" ]]; then
     printf '\n  Drift since the previous summary:\n'
     # Regressions first: that is the one thing worth waking up for. A mass of
     # "none -> something" after an invalidation is expected and gets counted,
