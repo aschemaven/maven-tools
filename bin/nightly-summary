@@ -26,6 +26,12 @@ set -u -o pipefail
 
 dir=$(dirname "${0}")
 root=$(cd "${dir}/.." && pwd)
+# --advance commits the streak snapshot; without it the run is read-only with
+# respect to state, so testing or re-reading a summary cannot distort the
+# failure gradation.
+: "${NSUM_ADVANCE:=false}"
+for _a in "$@"; do [[ "${_a}" == "--advance" ]] && NSUM_ADVANCE=true; done
+
 state_dir="${root}/var"
 cycle="${1-}"
 [[ -n "${cycle}" ]] || cycle=$(ls -1dt "${root}"/logs/jqa-cycle-* 2>/dev/null | head -1)
@@ -122,30 +128,114 @@ if [[ -r "${mx}" ]]; then
       } END { printf "%d %d %d\n", o, b, w }' "${mx}")
   printf '\n  Cells: %s ok, %s failed, %s unparseable\n' "${ok}" "${bad}" "${warn}"
 
-  # Drift against OUR previous summary, i.e. did build/test success change.
+  # Cell states, keyed by VARIANT NAME -- never by column position. An earlier
+  # version wrote "col 3", which told the reader nothing, and keyed the
+  # snapshot by it: when the variant set changed (dpv-* and m4-rc5/rc6
+  # dropped, m4-41x added) the same index named a DIFFERENT variant on either
+  # side, so the mail reported drift that never happened.
   snap="${state_dir}/nightly-summary-matrix.tsv"
-  awk -F'|' '/^\| `/{
+  cells="${state_dir}/nightly-summary-cells.tsv"
+  cur="/tmp/nsum-cur.$$"
+  awk -F'|' '
+    # The header carries the variant names; it precedes the rows it labels.
+    /^\| Project \|/ {
+      if (!have) { for (i=3;i<=NF;i++) { v=$i; gsub(/^ +| +$/,"",v); name[i]=v } have=1 }
+      next
+    }
+    /^\| `/ {
       gsub(/`|  */,"",$2);
       for (i=3;i<=NF;i++) {
         s="?";
-        if ($i ~ /white_check_mark/) s="ok";
-        else if ($i ~ /:x:/)         s="fail";
-        else if ($i ~ /warning/)     s="warn";
-        else if ($i ~ /—/)           s="none";
-        if (s!="?") printf "%s\t%d\t%s\n", $2, i-2, s;
+        if ($i ~ /white_check_mark/)   s="ok";
+        else if ($i ~ /:x:/)           s="fail";
+        else if ($i ~ /hourglass/)     s="timeout";
+        else if ($i ~ /no_entry_sign/) s="excluded";
+        else if ($i ~ /warning/)       s="warn";
+        else if ($i ~ /—/)             s="none";
+        if (s!="?" && name[i] != "") printf "%s\t%s\t%s\n", $2, name[i], s;
       }
-    }' "${mx}" | sort > /tmp/nsum-mx.$$ 2>/dev/null || true
+    }' "${mx}" | sort > "${cur}" 2>/dev/null || true
+
+  # Merge with the previous snapshot into one table the renderers share:
+  #   project, variant, state, streak, changed, previous-state
+  # The streak is how many consecutive summaries the cell has held this state.
+  # It is what lets a long-standing failure be told apart from a fresh one --
+  # a wall of red says nothing about which cell broke last night.
+  # A 3-column snapshot from before this change is read as streak 1.
+  awk -F'\t' -v snap="${snap}" '
+    BEGIN {
+      while ((getline line < snap) > 0) {
+        n = split(line, f, "\t")
+        if (n >= 3) { k = f[1] "\t" f[2]; old[k] = f[3]; st[k] = (n >= 4 && f[4] > 0 ? f[4] : 1) }
+      }
+    }
+    {
+      k = $1 "\t" $2
+      if (k in old) {
+        if (old[k] == $3) { sk = st[k] + 1; ch = 0 } else { sk = 1; ch = 1 }
+        pv = old[k]
+      } else { sk = 1; ch = 0; pv = "-" }
+      printf "%s\t%s\t%s\t%d\t%d\t%s\n", $1, $2, $3, sk, ch, pv
+    }
+  ' "${cur}" > "${cells}.$$" 2>/dev/null || true
+  mkdir -p "${state_dir}" && mv -f "${cells}.$$" "${cells}" 2>/dev/null || true
+
   if [[ -r "${snap}" ]]; then
     printf '\n  Drift since the previous summary:\n'
-    join -t'	' -j 1 <(awk -F'\t' '{print $1"#"$2"\t"$3}' "${snap}" | sort) \
-                     <(awk -F'\t' '{print $1"#"$2"\t"$3}' /tmp/nsum-mx.$$ | sort) 2>/dev/null \
-      | awk -F'\t' '$2!=$3 { split($1,a,"#"); printf "    %-42s col %s: %s -> %s\n", a[1], a[2], $2, $3; n++ }
-                    END { if (!n) print "    none -- every cell holds its previous state" }'
+    # Regressions first: that is the one thing worth waking up for. A mass of
+    # "none -> something" after an invalidation is expected and gets counted,
+    # not listed line by line.
+    awk -F'\t' '
+      $5 != 1 { next }
+      {
+        proj=$1; var=$2; to=$3; from=$6
+        if (from == "ok" && (to == "fail" || to == "warn" || to == "timeout"))
+          reg[++nr] = sprintf("      %-42s %-8s %s -> %s", proj, var, from, to)
+        else if ((from == "fail" || from == "warn" || from == "timeout") && to == "ok")
+          fix[++nf] = sprintf("      %-42s %-8s %s -> %s", proj, var, from, to)
+        else if (from == "none") first++
+        else if (to == "none")   cleared++
+        else if (to == "excluded") excl++
+        else oth[++no] = sprintf("      %-42s %-8s %s -> %s", proj, var, from, to)
+        n++
+      }
+      END {
+        if (!n) { print "    none -- every cell holds its previous state"; exit }
+        if (nr) { print "    REGRESSIONS (ok -> not ok):"; for (i=1;i<=nr;i++) print reg[i] }
+        if (nf) { print "    Fixed:";                      for (i=1;i<=nf;i++) print fix[i] }
+        if (no) { print "    Other transitions:";          for (i=1;i<=no;i++) print oth[i] }
+        if (first)   printf "    First result after invalidation: %d cell(s)\n", first
+        if (cleared) printf "    Result cleared (now unknown):    %d cell(s)\n", cleared
+        if (excl)    printf "    Now excluded by project-variants: %d cell(s)\n", excl
+      }' "${cells}"
+    # Long-standing failures, loudest first. A cell failing for weeks is a
+    # different problem from one that broke last night, and the plain-text
+    # part must say so too -- not only the coloured table.
+    awk -F'\t' '
+      ($3 == "fail" || $3 == "timeout") && $4 >= 3 { printf "      %-42s %-8s %s for %d summaries\n", $1, $2, $3, $4 | "sort -rn -k4"; n++ }
+      END { if (n) print "" }' "${cells}" > /tmp/nsum-long.$$ 2>/dev/null || true
+    if [[ -s /tmp/nsum-long.$$ ]]; then
+      printf '\n  Failing for three or more summaries:\n'
+      sort -t$'\t' -k1,1 /tmp/nsum-long.$$ | head -15
+    fi
+    rm -f /tmp/nsum-long.$$
+    # A changed variant set is a configuration change, not drift.
+    gone=$(comm -23 <(cut -f2 "${snap}" | sort -u) <(cut -f2 "${cur}" | sort -u) | tr '\n' ' ')
+    new_=$(comm -13 <(cut -f2 "${snap}" | sort -u) <(cut -f2 "${cur}" | sort -u) | tr '\n' ' ')
+    [[ -n "${gone// /}" ]] && printf '    Variants removed since then: %s\n' "${gone% }"
+    [[ -n "${new_// /}" ]] && printf '    Variants added since then:   %s\n' "${new_% }"
   else
     printf '\n  (no previous summary to compare against; recording this one as the baseline)\n'
   fi
-  mkdir -p "${state_dir}" && cp -f /tmp/nsum-mx.$$ "${snap}" 2>/dev/null || true
-  rm -f /tmp/nsum-mx.$$
+  # The snapshot advances ONLY for a real nightly, which passes --advance.
+  # The streak counts summaries, so every ad-hoc run used to bump all of them:
+  # three test invocations put every cell at streak 3 and the shading became
+  # meaningless. An ad-hoc run still writes the derived cells file (so the HTML
+  # renders) but leaves the counter where the nightly left it.
+  if [[ "${NSUM_ADVANCE:-false}" == "true" ]]; then
+    cut -f1-4 "${cells}" > "${snap}.$$" 2>/dev/null && mv -f "${snap}.$$" "${snap}" 2>/dev/null || true
+  fi
+  rm -f "${cur}"
 
   dr="${root}/reports/compat-drift.md"
   if [[ -r "${dr}" ]]; then
