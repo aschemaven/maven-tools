@@ -26,3 +26,19 @@
 # validation, so against 3.9.16 it measures suite-versus-version drift rather
 # than Maven. Add it back if the 3.9 line is to be covered deliberately.
 core/3.x/its-3   m3-10 m3-10x
+
+# The "-4" lines are Maven 4 code: each declares <mavenVersion>4.0.0-rc-7</…>
+# in its own POM, which is why select_mvn already builds them with Maven 4 in
+# the nightly. The MATRIX, however, ran them against the Maven 3 columns too,
+# where they cannot work -- 14 of 70 failures on 2026-10-09 were that, and the
+# new worst-first ordering put them at the very top, exactly where real
+# problems should be. Restricted to the Maven 4 variants.
+plugins/core-4/maven-clean-plugin        m4-rc7 m4-40x m4-41x
+plugins/core-4/maven-compiler-plugin     m4-rc7 m4-40x m4-41x
+plugins/core-4/maven-deploy-plugin       m4-rc7 m4-40x m4-41x
+plugins/core-4/maven-install-plugin      m4-rc7 m4-40x m4-41x
+plugins/core-4/maven-resources-plugin    m4-rc7 m4-40x m4-41x
+plugins/packaging-4/maven-jar-plugin     m4-rc7 m4-40x m4-41x
+plugins/packaging-4/maven-source-plugin  m4-rc7 m4-40x m4-41x
+shared-4/archiver                        m4-rc7 m4-40x m4-41x
+shared-4/filtering                       m4-rc7 m4-40x m4-41x
