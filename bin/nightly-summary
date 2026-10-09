@@ -25,7 +25,7 @@ set -u -o pipefail
 #     depending on compat-report's internals.
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 # --advance commits the streak snapshot; without it the run is read-only with
 # respect to state, so testing or re-reading a summary cannot distort the
 # failure gradation.

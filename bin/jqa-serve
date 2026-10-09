@@ -56,7 +56,7 @@ set -u -o pipefail
 #   what the store-current indirection prevents.
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 
 : "${NEO4J_IMAGE:=neo4j:5.26.20-community}"
 : "${NEO4J_BOLT_PORT:=7689}"

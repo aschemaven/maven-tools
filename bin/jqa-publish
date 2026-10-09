@@ -44,7 +44,7 @@ set -u -o pipefail
 #   PUBLISH_HEAP       default 2G
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 
 : "${PUBLISH_BOLT_PORT:=7688}"
 : "${PUBLISH_HTTP_PORT:=7475}"

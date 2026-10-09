@@ -28,7 +28,7 @@ set -eu -o pipefail
 #     nightly-summary-html [<title>]
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 cells="${root}/var/nightly-summary-cells.tsv"
 title="${1:-Maven compatibility matrix}"
 

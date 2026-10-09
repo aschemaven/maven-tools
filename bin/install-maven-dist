@@ -41,7 +41,7 @@ set -eu -o pipefail
 #     MAVEN_TOOLS_CACHE   where dists/ is kept (default: the repo root)
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 # shellcheck source=common-functions.sh
 source "${dir}/common-functions.sh"
 

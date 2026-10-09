@@ -91,7 +91,15 @@ set -u -o pipefail
 #   KEEP_STORES      how many dated stores to keep (default 3)
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+# CDPATH= is not decoration. CDPATH here contains "." and "..", so a relative
+# "cd bin/.." resolves THROUGH CDPATH -- and cd then ECHOES the directory it
+# landed in. The command substitution captures that echo as well as pwd, so
+# root becomes a two-line string and every path built from it is nonsense.
+# Measured: a summary invoked as "bin/nightly-summary" reported no matrix, no
+# HEAD history and no stores, all of which were present; the same script as
+# "./bin/nightly-summary" was correct. Only the leading "./" made the
+# difference, which is far too subtle to rely on.
+root=$(CDPATH= cd "${dir}/.." && pwd)
 cd "${root}" || exit 1
 
 : "${JQA_MVN_VERSION:=3.9.16}"

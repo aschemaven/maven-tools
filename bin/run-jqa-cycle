@@ -50,7 +50,7 @@ set -u -o pipefail
 #   logs/jqa-cycle-<timestamp>/{timing.txt,<stage>.log}
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 cd "${root}" || exit 1
 
 : "${JQA_MVN_VERSION:=3.9.16}"

@@ -33,7 +33,7 @@ set -u -o pipefail
 #     FETCH_FORCE         true to fetch even if the generation is unchanged
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 state_dir="${root}/var"
 base="${root}/jqassistant/publish"
 marker="${state_dir}/fetched-graph.txt"

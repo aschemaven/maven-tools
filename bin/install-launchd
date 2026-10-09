@@ -17,7 +17,7 @@ set -eu -o pipefail
 #     per machine.
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 label=net.aschemann.jqa-nightly
 plist="${HOME}/Library/LaunchAgents/${label}.plist"
 template="${root}/launchd/${label}.plist.template"

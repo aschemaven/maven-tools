@@ -30,7 +30,7 @@ set -u -o pipefail
 #     API walks, store size -- so a slowdown can be told apart from more work.
 
 dir=$(dirname "${0}")
-root=$(cd "${dir}/.." && pwd)
+root=$(CDPATH= cd "${dir}/.." && pwd)
 hist="${root}/metrics/jqa-timings.tsv"
 metrics="${root}/metrics/jqa-metrics.tsv"
 mkdir -p "${root}/reports"
