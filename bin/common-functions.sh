@@ -711,6 +711,20 @@ exec_mvn() {
   # friends.
   if [[ " ${goals} " == *" clean "* ]]; then
     find "${project_dir}" -type d -name target -not -path '*/src/*' -prune -exec /bin/rm -rf {} + 2>/dev/null || true
+    # maven-shade-plugin writes dependency-reduced-pom.xml into the MODULE
+    # ROOT, not into target/, so neither "mvn clean" nor the sweep above
+    # removes it. On a persistent workspace it survives, and apache-rat then
+    # counts it as an unapproved license and fails the build. Proven on
+    # core/mvnd: rat.txt named "! /dependency-reduced-pom.xml" as the single
+    # UNAPPROVED entry, and the same build passed once the file was moved
+    # away (rc 1 -> 0, one variable changed). Upstream CI never sees this --
+    # a fresh runner starts empty. Nine such leftovers were sitting in the
+    # tree, among them surefire and its-3, both also red.
+    #
+    # Safe to delete: the file is gitignored and shade regenerates it. The
+    # src/ exclusion matters as much as it does above -- apache-resources
+    # ships one as a deliberate test fixture under src/test/resources.
+    find "${project_dir}" -name dependency-reduced-pom.xml -not -path '*/src/*' -exec /bin/rm -f {} + 2>/dev/null || true
   fi
 
   # Inject a transient .mvn/extensions.xml with the build extensions we want:
