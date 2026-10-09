@@ -4,15 +4,27 @@
 #
 # The matrix default is `-Prun-its clean verify`, which is right for a plugin:
 # verify runs its ITs without pushing anything into a repository. It is wrong
-# for the Maven core IT suites, whose ITs resolve reactor modules as ordinary
-# dependencies -- maven-it-plugin-bootstrap is built by its/core-it-support and
-# declared as a dependency of core-it-suite, and `verify` never installs it, so
-# every IT dies on
-#   Could not find artifact org.apache.maven.its:maven-it-plugin-bootstrap:jar
-# Measured on core/maven-4.0.x: `clean verify` fails, `clean install` passes
-# (MavenITBootstrapTest 1/0) with nothing else changed. Upstream builds it the
-# same way -- its/README.md documents `mvn clean install -Prun-its` and the
-# project's own GitHub workflow runs `./mvnw install -Prun-its`.
+# for the Maven core IT suites, because their ITs fork a separate Maven process
+# that has no reactor. Inside the fork, maven-it-plugin-bootstrap is resolved
+# as a *plugin* (PluginResolutionException), looked up through
+# -Dmaven.repo.local.tail=<outer local repo>; `verify` never installs it there,
+# so the lookup comes back absent:
+#   Plugin org.apache.maven.its:maven-it-plugin-bootstrap:2.1-SNAPSHOT or one
+#   of its dependencies could not be resolved
+# The outer build itself is fine -- Maven's workspace reader satisfies the
+# reactor dependency and the apache-maven distro zip from the sibling targets.
+# So the rule is not "verify is broken" but "the IT support artifacts must be
+# in the local repository, and with a cold/isolated repo only `install` puts
+# them there". A matrix reusing a warm repo would mask the difference, which is
+# why an earlier single measurement looked ambiguous.
+#
+# Measured 2026-10-09 on core/maven-4.0.x: two worktrees off 3b8d25150b with
+# separate cold local repositories, m3-9, everything else identical.
+# `clean verify` fails, `clean install` passes (MavenITBootstrapTest 1/0); the
+# artifact is present in the install run's repo and absent in the verify run's.
+# Upstream builds it the same way -- its/README.md documents
+# `mvn clean install -Prun-its -Dmaven.repo.local=...` and the project's own
+# GitHub workflow runs `./mvnw install -Prun-its`.
 core/maven-4.0.x   -Prun-its clean install
 core/maven         -Prun-its clean install
 core/3.x/maven-3   -Prun-its clean install
