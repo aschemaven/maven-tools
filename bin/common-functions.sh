@@ -790,11 +790,13 @@ exec_mvn() {
   # exported true). Force auto-isolation so the resulting flat-layout
   # artefacts do not pollute the shared M2_REPO.
   local force_isolation=false
+  local split_skip=false
   for split_skip_p in ${LRM_SPLIT_SKIP_PROJECTS:-}; do
     if [[ "${project}" == "${split_skip_p}" ]]; then
       opts="${opts} -Daether.enhancedLocalRepository.split=false"
       ext="${ext} (LRM split disabled)"
       force_isolation=true
+      split_skip=true
       break
     fi
   done
@@ -929,6 +931,26 @@ exec_mvn() {
       cd "${project_dir}"
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
+      # The CLI override above does not reach a FORKED build. We export the
+      # split properties through MAVEN_OPTS, and MAVEN_OPTS is an environment
+      # variable: an integration test that spawns its own Maven inherits
+      # split=true whatever the outer command line says. So strip the
+      # properties for an opted-out project rather than override them.
+      #
+      # Proven on plugins/packaging/maven-ear-plugin, whose EarMojoIT forks
+      # Maven against a flat fixture repository checked into the project
+      # (src/test/resources/m2repo). With the properties exported, the fork
+      # looked under m2repo/{installed,cached}/... and 101 of 103 tests failed
+      # on a missing eartest:ejb-sample-one:jar:1.0; with MAVEN_OPTS cleared,
+      # the same five sampled tests passed. Adding split=false to the outer
+      # CLI alone did not fix it -- it only moved the breakage to the plugin
+      # jar, because invoker:install then wrote flat while the fork still
+      # looked under installed/snapshots/.
+      if ${split_skip}; then
+        export MAVEN_OPTS="$(printf '%s' "${MAVEN_OPTS:-}" \
+          | sed -E 's/-Daether\.enhancedLocalRepository\.(split|splitLocal|splitRemote)=[A-Za-z]*//g' \
+          | tr -s ' ')"
+      fi
       # shellcheck disable=SC2086
       ${_to_prefix} ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
     ) > "${current_logs}"

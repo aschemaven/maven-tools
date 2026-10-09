@@ -19,3 +19,14 @@
 # fails. Disable split for this project; auto-isolation contains the
 # flat-layout pollution to .m2-isolated/plexus--components--compiler/.
 plexus/components/compiler
+
+# Its EarMojoIT forks Maven against a FLAT fixture repository checked into the
+# project (src/test/resources/m2repo, 26 tracked artefacts). With the split
+# properties in MAVEN_OPTS the fork looks under m2repo/{installed,cached}/ and
+# finds nothing: 101 of 103 tests failed on a missing
+# eartest:ejb-sample-one:jar:1.0. Verified by A/B in a throwaway worktree --
+# MAVEN_OPTS cleared: 5 of 5 sampled tests pass; split exported: 5 of 5 fail.
+#
+# This is a generic trap, not a quirk of this plugin: any project whose ITs
+# fork Maven against a checked-in flat repository breaks the same way.
+plugins/packaging/maven-ear-plugin
