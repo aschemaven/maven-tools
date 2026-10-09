@@ -929,6 +929,12 @@ exec_mvn() {
     [[ ${attempt} -ge ${max_retries} ]] && break
     attempt=$((attempt + 1))
   done
+  # The outer Maven's exit code, for callers that must classify the run. NOT
+  # local, and not derivable from the log: an IT suite's log carries one
+  # BUILD SUCCESS/FAILURE per forked build, so grepping it cannot tell the
+  # outer result from a nested one.
+  EXEC_MVN_STATUS="${status}"
+
   local retry_tag=""
   if [[ ${attempt} -eq 1 ]]; then
     retry_tag=" after 1 retry"

@@ -170,6 +170,12 @@ total=$(( ${#matrix_variants[@]} * ${#matrix_projects[@]} ))
 noof_projects="${#matrix_variants[@]}"
 
 # Classify a Maven build log -> ok|fail|warn (mirrors the upstream matrix).
+# FALLBACK ONLY -- prefer EXEC_MVN_STATUS. This cannot be trusted on a log
+# that embeds nested Maven runs: "grep -q BUILD SUCCESS" matches anywhere, so
+# one successful forked build outranks any number of failed ones. Measured on
+# 2026-10-08: 58 of 466 cells had both outcomes in their log and every one of
+# them was classified "ok" -- maven-invoker-plugin with 8 successes against
+# 213 failures among them.
 classify_log() {
   local log="$1"
   [[ -r "${log}" ]] || { echo warn; return; }
@@ -249,10 +255,17 @@ build_component_row() {
     # broken log rather than "we stopped this cell".
     if [[ "${EXEC_MVN_TIMED_OUT:-false}" == "true" ]]; then
       result="timeout"
+    elif [[ -n "${EXEC_MVN_STATUS:-}" ]]; then
+      # The outer build's exit code is the ground truth; no parsing involved.
+      [[ "${EXEC_MVN_STATUS}" -eq 0 ]] && result="ok" || result="fail"
     else
       result=$(classify_log "${cell_log}")
     fi
-    btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | head -1 || true)
+    # tail, not head: with nested builds the first "Total time" belongs to the
+    # first forked IT (2.493 s was recorded for a 7.5-hour cell). The outer
+    # reactor's summary is the last one. tail also consumes all input, so no
+    # SIGPIPE on the producer.
+    btime=$(sed -nE 's/.*Total time:[[:space:]]*(.*)/\1/p' "${cell_log}" 2>/dev/null | tail -1 || true)
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
     cell_file="${v_root}/cells/${MATRIX_NS:+${MATRIX_NS}/}${project}.json"
