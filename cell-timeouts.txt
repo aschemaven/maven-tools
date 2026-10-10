@@ -9,7 +9,15 @@
 # matrix made no other progress, and the whole run was still unfinished a day
 # later. One runaway cell must cost one cell, not the window.
 #
-# Why its-3 is exempt: the core integration-test suite legitimately needs
-# hours (measured 2790s to 51159s across variants). Capping it would discard
-# the result we actually want instead of saving time.
-core/3.x/its-3   0
+# its-3 was exempt (0 = no limit) because the suite legitimately needed hours:
+# 2790s to 51159s across variants. That range was dominated by the Maven 4
+# columns, and those are now blocked for this project in project-variants.txt,
+# because the 3.x harness drives Maven through MavenCli while Maven 4 uses
+# MavenCling. What remains is the 3.x columns, whose measured worst case is
+# 2790s (46 min), so 7200 leaves 2.6x headroom.
+#
+# An exemption is no longer the safe choice either: the cell holds the matrix
+# lock, and a run-compat-matrix that finds the lock held exits 0 SILENTLY. One
+# hung its-3 cell would therefore not just cost its own window, it would make
+# the next scheduled matrix run disappear without a trace.
+core/3.x/its-3   7200

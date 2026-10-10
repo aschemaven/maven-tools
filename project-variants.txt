@@ -22,10 +22,42 @@
 #     51159s (14.2h) and 9849s. Together about 17h of every full matrix pass,
 #     spent on the above.
 #
-# m3-9 is left out as well: the suite has been adapted to 3.10's stricter
-# validation, so against 3.9.16 it measures suite-versus-version drift rather
-# than Maven. Add it back if the 3.9 line is to be covered deliberately.
-core/3.x/its-3   m3-10 m3-10x
+# Against the 3.x columns the suite is expected to be GREEN on every one of
+# them, m3-9 included. A red cell there is to be investigated, not explained
+# away as suite-versus-version drift: that was the earlier reading of m3-9, and
+# it was wrong. The 2026-10-07 m3-9 red was
+#   Failed to clean project: Failed to delete .../core-it-suite/target/surefire-reports
+# which is the signature of two matrix runs building the same directory. It
+# finished at 17:16, and the lock that serialises runs (da4696e) landed the
+# next morning at 09:03 -- so the cell is an artifact of the unserialised
+# window, not a finding. Same for the m3-10 cell of that window, which claimed
+# 0.661s for a suite that needs ~20 minutes. Both were dropped so the table
+# shows "no result yet" until they are rebuilt.
+#
+# The cost objection does not apply to the 3.x columns: the two ruinous cells
+# quoted above were Maven 4 ones. The measured worst case for a 3.x run is
+# 2790s (46 min), so all three columns together are roughly two hours.
+core/3.x/its-3   m3-9 m3-10 m3-10x
+
+# The two mvnd checkouts are the same case as the "-4" lines below, by the same
+# criterion -- what the project's own POM declares it is built against:
+#
+#   core/3.x/mvnd-1  branch mvnd-1.x, <maven.version>3.9.16</maven.version>
+#   core/mvnd        branch master,   <maven.version>4.0.0-rc-7</maven.version>
+#
+# So each belongs to one Maven line, and the opposite columns measure nothing.
+# That matches the cells: mvnd-1 is ok on all three 3.x columns and red on all
+# three 4.x ones, core/mvnd the reverse.
+#
+# NOTE for future candidates: "red on every column of one major" is NOT by
+# itself a reason to restrict a project. doxia/doxia, plexus/components/compiler,
+# maven-ear-plugin and maven-artifact-plugin show exactly that shape, and for
+# them the red IS the finding -- a plugin compiled against the Maven 3 API still
+# has to run under Maven 4, and ear-plugin/plexus-compiler are the two projects
+# where the LRM-split fix was validated 5/5 and 12/0, so their 4.x reds are
+# stale pre-fix cells. Restrict only on a declared maven.version, as here.
+core/3.x/mvnd-1  m3-9 m3-10 m3-10x
+core/mvnd        m4-rc7 m4-40x m4-41x
 
 # The "-4" lines are Maven 4 code: each declares <mavenVersion>4.0.0-rc-7</…>
 # in its own POM, which is why select_mvn already builds them with Maven 4 in
