@@ -223,17 +223,9 @@ if [[ -r "${mx}" ]]; then
         if (cleared) printf "    Result cleared (now unknown):    %d cell(s)\n", cleared
         if (excl)    printf "    Now excluded by project-variants: %d cell(s)\n", excl
       }' "${cells}"
-    # Long-standing failures, loudest first. A cell failing for weeks is a
-    # different problem from one that broke last night, and the plain-text
-    # part must say so too -- not only the coloured table.
-    awk -F'\t' '
-      ($3 == "fail" || $3 == "timeout") && $4 >= 3 { printf "      %-42s %-8s %s for %d summaries\n", $1, $2, $3, $4 | "sort -rn -k4"; n++ }
-      END { if (n) print "" }' "${cells}" > /tmp/nsum-long.$$ 2>/dev/null || true
-    if [[ -s /tmp/nsum-long.$$ ]]; then
-      printf '\n  Failing for three or more summaries:\n'
-      sort -t$'\t' -k1,1 /tmp/nsum-long.$$ | head -15
-    fi
-    rm -f /tmp/nsum-long.$$
+    # No separate long-standing-failures list: the matrix already carries the
+    # streak on the cell itself (an "N x" suffix, and deepening red in the HTML
+    # part), so a list after the table repeated what the table had just said.
     # A changed variant set is a configuration change, not drift.
     gone=$(comm -23 <(cut -f2 "${snap}" | sort -u) <(cut -f2 "${cur}" | sort -u) | tr '\n' ' ')
     new_=$(comm -13 <(cut -f2 "${snap}" | sort -u) <(cut -f2 "${cur}" | sort -u) | tr '\n' ' ')
