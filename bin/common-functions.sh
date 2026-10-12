@@ -739,6 +739,21 @@ exec_mvn() {
   # maven-install-plugin, maven-rar-plugin, maven-clean-plugin, and
   # friends.
   if [[ " ${goals} " == *" clean "* ]]; then
+    # Restore write permission before deleting. rm -rf cannot remove a file
+    # whose PARENT directory lacks the write bit, and it fails silently here
+    # because of the "|| true" below -- so such a leftover survives every
+    # sweep. maven-clean-plugin's own "read-only" IT creates exactly that: a
+    # dr-xr-xr-x directory holding read-only.properties. One had been sitting
+    # in the tree since 2026-06-07, and it made every build of BOTH clean
+    # plugin checkouts die in the clean phase itself:
+    #   Failed to clean project: Failed to delete
+    #     target/it/read-only/target/read-only-dir/read-only.properties
+    # That is 12 red cells (2 projects x 6 variants), on every column, with
+    # nothing Maven-specific about it. Upstream CI never sees it, because a
+    # fresh runner starts empty. Measured: after chmod -R u+w the same clean
+    # succeeds in 3.4s.
+    find "${project_dir}" -type d -name target -not -path '*/src/*' -prune \
+      -exec /bin/chmod -R u+w {} + 2>/dev/null || true
     find "${project_dir}" -type d -name target -not -path '*/src/*' -prune -exec /bin/rm -rf {} + 2>/dev/null || true
     # maven-shade-plugin writes dependency-reduced-pom.xml into the MODULE
     # ROOT, not into target/, so neither "mvn clean" nor the sweep above
@@ -891,7 +906,28 @@ exec_mvn() {
       echo "SKIP variant ${variant}: no Maven resolved (need variants/${variant}/maven or installed $(variant_version "${variant}"))" >&2
       return 2
     fi
-    mvn_info="variant ${variant} (Maven $(variant_version "${variant}"))"
+    # Maven 4 refuses a -P profile that does not exist; Maven 3 only warns.
+    # Measured on plexus-compiler, which declares no run-its profile anywhere
+    # (its ITs are bound to verify unconditionally), JDK 21, validate -N:
+    #   4.0.0-rc-7  -Prun-its  -> rc 1, "[ERROR] The requested profiles
+    #                             [run-its] ... MissingProfilesException"
+    #   4.0.0-rc-7  -P?run-its -> rc 0, downgraded to "[INFO] The requested
+    #                             optional profiles [run-its] ..."
+    #   3.9.16      -Prun-its  -> rc 0, [WARNING]
+    # So on the Maven 4 columns the optional form is strictly better: it keeps
+    # the profile where it exists and stops the cell from dying at startup
+    # where it does not.
+    #
+    # Deliberately NOT applied to the Maven 3 columns. 3.9.16 does not know the
+    # syntax and looks for a profile literally named "?run-its", warning that
+    # it does not exist -- which would silently leave run-its INACTIVE and skip
+    # the ITs of every project that does have the profile. Measured too.
+    local v_mvn_version
+    v_mvn_version=$(variant_version "${variant}")
+    if [[ "${v_mvn_version}" == 4* && " ${goals} " == *" -Prun-its "* ]]; then
+      goals=${goals//-Prun-its/-P?run-its}
+    fi
+    mvn_info="variant ${variant} (Maven ${v_mvn_version})"
     [[ -n "${v_javahome}" ]] && mvn_info="${mvn_info}, JDK $(variant_jdk "${variant}")"
   elif test -r "${project_dir}/mvnw"; then
     mvn="./mvnw"

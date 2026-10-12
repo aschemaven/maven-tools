@@ -28,3 +28,8 @@
 core/maven-4.0.x   -Prun-its clean install
 core/maven         -Prun-its clean install
 core/3.x/maven-3   -Prun-its clean install
+
+# No entry is needed for a project that declares no run-its profile (such as
+# plexus-compiler, whose ITs are bound to verify unconditionally): exec_mvn
+# rewrites -Prun-its to the optional form -P?run-its on the Maven 4 columns,
+# which Maven 4 accepts and ignores. See the comment at that rewrite.
