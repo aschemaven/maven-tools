@@ -36,6 +36,16 @@
   <dict>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!--
+      The builder's worktree. It is NOT this machine's path: godestorm runs
+      the nightly from the feature/decoupled-scanning worktree, this machine
+      pulls into main. fetch-graph defaults GRAPH_SOURCE_ROOT to the local
+      root, so leaving it unset made every hourly tick read a
+      var/nightly-status.txt that does not exist over there and report
+      "no run status; nothing to do" -- silently, for five days.
+    -->
+    <key>GRAPH_SOURCE_ROOT</key>
+    <string>/Users/ascheman/wrk/maven/aschemaven/maven-tools/feature/decoupled-scanning</string>
   </dict>
 
   <key>WorkingDirectory</key>

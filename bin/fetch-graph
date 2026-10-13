@@ -99,9 +99,23 @@ fi
 remote_status=$("${SSH}" -o ConnectTimeout=10 "${source_host}" \
   "cat '${GRAPH_SOURCE_ROOT}/var/nightly-status.txt' 2>/dev/null" || true)
 if [[ -z "${remote_status}" ]]; then
-  say "no run status on ${source_host}; nothing to do"
+  # NOT "nothing to do". The builder writes this file once per run and never
+  # removes it, so an empty read means we are looking in the wrong place --
+  # GRAPH_SOURCE_ROOT defaults to THIS machine's root, and the builder moved
+  # its harness to another worktree. That read as a quiet "nothing new" every
+  # hour from 2026-10-09 to 2026-10-13: five days in which the local graph
+  # silently went stale while the agent reported success. A condition that
+  # cannot heal itself has to be said out loud, but once a day is enough.
+  say "no run status at ${GRAPH_SOURCE_ROOT} on ${source_host} -- wrong root, or the builder has never completed a run"
+  today=$(date '+%F')
+  if [[ "$(cat "${state_dir}/fetch-graph-nostatus.txt" 2>/dev/null || true)" != "${today}" ]]; then
+    printf '%s\n' "${today}" > "${state_dir}/fetch-graph-nostatus.txt"
+    mail_note "jQA graph not fetched: no run status on ${source_host}" \
+              "$(printf '%s has no var/nightly-status.txt under\n\n  %s\n\nso no generation can be compared and nothing is being fetched. Either that\nis not the worktree the builder runs from (set GRAPH_SOURCE_ROOT in\n~/Library/LaunchAgents/net.aschemann.fetch-graph.plist), or it has never\ncompleted a run.' "${source_host}" "${GRAPH_SOURCE_ROOT}")"
+  fi
   exit 0
 fi
+rm -f "${state_dir}/fetch-graph-nostatus.txt"
 result=$(printf '%s' "${remote_status}" | awk -F'\t' '{print $2}')
 if [[ "${result}" != "OK" ]]; then
   say "last run on ${source_host} is ${result:-unknown}; not fetching a partial graph"
