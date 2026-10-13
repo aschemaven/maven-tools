@@ -337,6 +337,19 @@ fi
 # those disappearing from the manifest, so they are no longer in PROJECTS.
 clean_injected_mvn() {
   local repo_dir="$1" removed=0 f tmpl own d
+  # Canonicalise first. ${root}/maven is a symlink, and since 2026-10-10 it
+  # points at a second one (~/wrk/maven/maven -> ../mvn, which shortened the
+  # gpg agent socket path below the 104-byte sun_path limit). find does not
+  # follow a symlink given as its STARTING point, so both sweeps below walked
+  # nothing at all and every injected file survived -- `find maven ...` finds
+  # 0, `find -L maven ...` finds 118. That stayed invisible as long as
+  # USE_DEVELOCITY=true made the pollution check skip those files; forcing
+  # Develocity off (65ff2db, 2026-10-09 21:56) turned the 118 leftovers into a
+  # hard abort, and the nightly died in the build stage three minutes in on
+  # 2026-10-10 and 2026-10-11 -- two whole nights lost, each reported twice.
+  # Resolving the path beats passing -L, which would also follow symlinks
+  # encountered inside the tree.
+  repo_dir=$(CDPATH= cd "${repo_dir}" 2>/dev/null && pwd -P) || return 0
   for f in develocity.xml extensions.xml; do
     tmpl="${root}/develocity/${f}"
     [[ -r "${tmpl}" ]] || continue
