@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jqassistant-rules xmlns="http://schema.jqassistant.org/rule/v2.2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://schema.jqassistant.org/rule/v2.2 https://jqassistant.github.io/jqassistant/current/schema/jqassistant-rule-v2.2.xsd">
+
+    <!--
+      The git-clone graph (jqassistant.plugin.git) and the GitHub-API graph
+      (jqassistant-github-plugin) are built INDEPENDENTLY and do not share nodes.
+
+      Verified 2026-10-10 on maven-jar-plugin:
+        * the GitHub repo's 25 tags share 0 nodes with the git clone's 50 tags;
+        * a commit SHA referenced by a GitHub PR exists as 2 distinct :Commit nodes.
+      So the two worlds are parallel, not connected - which is why lead-time
+      queries that start at a GitHub PR cannot reach the git commit history.
+
+      The universal identity is Commit.sha: git SHAs are globally unique, so
+      folding commits by SHA only merges TRUE duplicates (the same commit seen in
+      several local clones and via the GitHub API), never commits of different
+      projects. After the merge, a GitHub PullRequest / Tag / Release that points
+      at a commit (HAS_HEAD / HAS_BASE / ON_COMMIT / REFERENCES_TAG) lands on the
+      very node the git clone owns via HAS_COMMIT - so PR -> commit -> containing
+      release can be walked. This mirrors maven-artifact-identity's
+      SingleArtifactPerCoordinate.
+
+      PERFORMANCE: grouping ~205k :Commit nodes by sha needs an index on
+      Commit.sha (a missing index on Commit.sha was already a measured hot spot,
+      see .jqassistant-github.yml). Checked on the published graph 2026-10-13:
+      the index is there (index_41080b1a, :Commit(sha)), so nothing has to be
+      created by hand. That is an auto-named Neo4j index, which does NOT prove
+      it is recreated on every fresh store - if this group ever turns slow, the
+      first thing to check is `SHOW INDEXES` on that store.
+    -->
+    <group id="git-github-identity">
+        <includeConcept refId="git-github:SingleCommitPerSha"/>
+        <includeConcept refId="git-github:GitCloneLinkedToGitHub"/>
+        <includeConstraint refId="git-github:CommitShaIsUnique"/>
+    </group>
+
+    <concept id="git-github:SingleCommitPerSha">
+        <description>Folds :Commit nodes that share a Git SHA into one node, so the git-clone history and the GitHub PR/Tag/Release references point at the same commit.</description>
+        <cypher><![CDATA[
+CALL {
+  MATCH (c:Commit)
+  WHERE c.sha IS NOT NULL
+  WITH c.sha AS sha, collect(c) AS nodes
+  WHERE size(nodes) > 1
+  CALL {
+    // Keep the copy that carries the most detail: the git-clone copy records
+    // CONTAINS_CHANGE edges, the GitHub-API copy usually does not. Ties are
+    // deterministic by elementId so the outcome is scan-order independent.
+    WITH nodes
+    UNWIND nodes AS n
+    OPTIONAL MATCH (n)-[:CONTAINS_CHANGE]->(ch)
+    WITH n, count(ch) AS changes
+    ORDER BY changes DESC, elementId(n) ASC
+    RETURN collect(n) AS ranked
+  }
+  // mergeRels:false re-points every relationship onto the survivor without
+  // folding parallels (same policy and reason as maven-artifact-identity).
+  CALL apoc.refactor.mergeNodes(ranked, {properties: 'discard', mergeRels: false}) YIELD node
+  RETURN count(node) AS mergedCommits
+}
+RETURN mergedCommits
+        ]]></cypher>
+    </concept>
+
+    <concept id="git-github:GitCloneLinkedToGitHub">
+        <requiresConcept refId="git-github:SingleCommitPerSha"/>
+        <description>Links each local git clone to its GitHub repository (:Repository:Git)-[:SAME_PROJECT]->(:Repository:GitHub) via a commit they now share, after commits were folded by SHA.</description>
+        <cypher><![CDATA[
+MATCH (h:Repository:GitHub)-[:HAS_PULL_REQUEST]->(:PullRequest)-[:HAS_HEAD|HAS_BASE]->(c:Commit)
+MATCH (g:Repository:Git)-[:HAS_COMMIT]->(c)
+WITH DISTINCT g, h
+MERGE (g)-[:SAME_PROJECT]->(h)
+RETURN count(*) AS linkedRepositories
+        ]]></cypher>
+    </concept>
+
+    <constraint id="git-github:CommitShaIsUnique" severity="minor">
+        <requiresConcept refId="git-github:SingleCommitPerSha"/>
+        <description>No Git SHA may be represented by more than one :Commit node. Guards the merge above: a SHA that still has several nodes means the merge did not reach it.</description>
+        <cypher><![CDATA[
+MATCH (c:Commit)
+WHERE c.sha IS NOT NULL
+WITH c.sha AS sha, count(c) AS nodes
+WHERE nodes > 1
+RETURN sha, nodes
+ORDER BY nodes DESC, sha
+LIMIT 50
+        ]]></cypher>
+    </constraint>
+
+</jqassistant-rules>

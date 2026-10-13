@@ -60,6 +60,15 @@ jqassistant:
       # maven:SingleArtifactPerCoordinate -- so this ordering is observed
       # behaviour, not an invariant.
       - maven-artifact-identity
+      # Same shape, for the commit graph: the git-clone plugin and the GitHub
+      # plugin build their worlds independently, so a commit that both saw
+      # exists twice. Measured on the published graph: 205091 :Commit nodes for
+      # 121905 distinct SHAs, and on maven-jar-plugin a SHA referenced by a
+      # GitHub PR sat on 2 nodes while the repo's 25 GitHub tags shared 0 nodes
+      # with the clone's 50. Folding by SHA is what lets a query walk
+      # PR -> commit -> containing release at all. Early, like the artifact
+      # fold above and for the same reason.
+      - git-github-identity
       - default
       # Wires each artifact's placeholder types into the scanned JDK's
       # hierarchy; without it EXTENDS* stops at the JDK boundary.
