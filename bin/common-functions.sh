@@ -543,10 +543,33 @@ fi
 # env vars do, and MAVEN_OPTS is what every mvn shell launcher reads.
 #
 # Set MAVEN_LRM_SPLIT=false to opt out.
+#
+# "Opt out" has to REMOVE the properties, not merely decline to add them.
+# MAVEN_OPTS is inherited, and the only caller that opts out -- run-compat-matrix
+# (66e3a2b) -- is started by compat-tick, which sources this file FIRST and
+# therefore exports split=true before the matrix can set the flag. The old
+# "add only when absent" test then saw the properties already there and left
+# them alone, so MAVEN_LRM_SPLIT=false was a no-op for every scheduled matrix
+# run. It worked only when run-compat-matrix was started from a clean shell,
+# which is how every A/B measurement behind 66e3a2b was taken -- and never how
+# the nightly runs it.
+#
+# Measured on godestorm 2026-10-21: core/maven installed
+# maven-api-core:4.1.0-SNAPSHOT into repository/installed/snapshots/, while the
+# forked core-it-suite read the same repository as a FLAT maven.repo.local.tail
+# and could not find it -- 605 of 1094 ITs in error, identically on all six
+# variants, which is what gave the cells the look of a Maven incompatibility.
+strip_lrm_split_opts() {
+  export MAVEN_OPTS="$(printf '%s' "${MAVEN_OPTS:-}" \
+    | sed -E 's/-Daether\.enhancedLocalRepository\.(split|splitLocal|splitRemote)=[A-Za-z]*//g' \
+    | tr -s ' ')"
+}
 if [[ "${MAVEN_LRM_SPLIT:-true}" == "true" ]]; then
   if [[ ! "${MAVEN_OPTS:-}" =~ aether\.enhancedLocalRepository\.split ]]; then
     export MAVEN_OPTS="${MAVEN_OPTS:-} -Daether.enhancedLocalRepository.split=true -Daether.enhancedLocalRepository.splitLocal=true -Daether.enhancedLocalRepository.splitRemote=true"
   fi
+else
+  strip_lrm_split_opts
 fi
 
 # --- Develocity: off in the harness -----------------------------------------
@@ -1012,9 +1035,7 @@ exec_mvn() {
       # jar, because invoker:install then wrote flat while the fork still
       # looked under installed/snapshots/.
       if ${split_skip}; then
-        export MAVEN_OPTS="$(printf '%s' "${MAVEN_OPTS:-}" \
-          | sed -E 's/-Daether\.enhancedLocalRepository\.(split|splitLocal|splitRemote)=[A-Za-z]*//g' \
-          | tr -s ' ')"
+        strip_lrm_split_opts
       fi
       # shellcheck disable=SC2086
       ${_to_prefix} ${mvn} -B -s "${v_settings}" ${opts} ${goals} 2>&1
