@@ -72,7 +72,8 @@ awk -F'\t' -v rel="${released}" '
     }
   }' "${cells}" | sort | cut -f2 > "${order}"
 
-awk -F'\t' -v title="${title}" -v RELNAMES="${released}" -v ORDERFILE="${order}" '
+awk -F'\t' -v title="${title}" -v RELNAMES="${released}" -v ORDERFILE="${order}" \
+    -v today="$(date '+%F')" -v stale="${NSUM_STALE_DAYS:-3}" '
 function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
 
 # Background and foreground per state. Failure deepens with the streak, so a
@@ -97,6 +98,19 @@ function cls(state, streak) {
   }
   return "z"
 }
+function jdn(y, m, d,   a, yy, mm) {
+  a = int((14 - m) / 12); yy = y + 4800 - a; mm = m + 12 * a - 3
+  return d + int((153 * mm + 2) / 5) + 365 * yy \
+         + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045
+}
+# Days since the cell was MEASURED, -1 if unknown. The streak counts
+# summaries, so on a cell the matrix has not reached it counts mails and the
+# deepening red then reports the age of a mail thread, not a worsening build.
+function cell_age(s,   t, p) {
+  if (!nowjd) { split(today, t, "-"); nowjd = jdn(t[1] + 0, t[2] + 0, t[3] + 0) }
+  if (length(s) != 10 || split(s, p, "-") != 3) return -1
+  return nowjd - jdn(p[1] + 0, p[2] + 0, p[3] + 0)
+}
 function mark(state) {
   if (state == "ok")       return "ok"
   if (state == "fail")     return "FAIL"
@@ -112,11 +126,12 @@ function mark(state) {
 FILENAME == ORDERFILE { porder[++np] = $1; next }
 
 {
-  proj = $1; var = $2; st = $3; streak = $4 + 0; ch = $5 + 0; prev = $6
+  proj = $1; var = $2; st = $3; streak = $4 + 0; ch = $5 + 0; prev = $6; when = $7
   if (!(var in seenv))  { seenv[var] = 1;  vorder[++nv] = var }
   seenp[proj] = 1
   state[proj, var] = st; strk[proj, var] = streak
   chg[proj, var] = ch;   prv[proj, var] = prev
+  meas[proj, var] = when
   if (ch && st != "ok" && st != "excluded" && st != "none" && prev == "ok") regress[++nreg] = proj "\t" var "\t" prev "\t" st
   if (ch && st == "ok" && (prev == "fail" || prev == "warn" || prev == "timeout")) fixed[++nfix] = proj "\t" var "\t" prev "\t" st
 }
@@ -140,6 +155,7 @@ END {
   print ".nsum td.f4{background:#d93025;color:#fff}"
   print ".nsum td.f5{background:#b31412;color:#fff}"
   print ".nsum td.c{outline:2px solid #1a73e8;outline-offset:-2px}"
+  print ".nsum td.s{font-style:italic;opacity:.72}"
   print ".nsum .lo{font-size:11px;color:#5f6368}"
   print "</style>"
   print "<div class=\"nsum\">"
@@ -180,12 +196,22 @@ END {
         st = state[p, v]; sk = strk[p, v]
         # A changed cell is outlined and carries its previous state, so the
         # table answers "what moved" as well as "what is red".
-        c = cls(st, sk)
+        age = cell_age(meas[p, v])
+        # A stale cell is shown at its measured age, not at its streak, and
+        # its red is not deepened: nothing about it got worse, it was simply
+        # never re-run. "12d" is the honest label; "12x" was not.
+        c = (age >= stale && st == "fail") ? "f2" : cls(st, sk)
         if (chg[p, v]) c = c " c"
+        if (age >= stale) c = c " s"
         tip = chg[p, v] ? sprintf(" (%s&rarr;%s)", esc(prv[p, v]), esc(st)) : ""
         extra = ""
-        if ((st == "fail" || st == "timeout") && sk >= 2) extra = sprintf(" %d&times;", sk)
-        printf "<td class=\"%s\">%s%s%s</td>", c, mark(st), extra, tip
+        if (age >= stale && st != "ok" && st != "none" && st != "excluded")
+          extra = sprintf(" %dd", age)
+        else if ((st == "fail" || st == "timeout") && sk >= 2)
+          extra = sprintf(" %d&times;", sk)
+        printf "<td class=\"%s\"%s>%s%s%s</td>", c, \
+               (age >= 0 ? sprintf(" title=\"measured %s\"", esc(meas[p, v])) : ""), \
+               mark(st), extra, tip
       } else {
         printf "<td class=\"z\">&mdash;</td>"
       }
@@ -196,6 +222,9 @@ END {
 
   print "<p class=\"lo\" style=\"margin:14px 0 0\">"
   print "Red deepens with the number of consecutive summaries a cell has been failing."
+  print "A faded, italic cell carries an age in days instead: that is the last"
+  print "measurement, which the matrix has not re-run since, so its streak would"
+  print "count mails rather than builds. Hover a cell for the date it was measured."
   print "A blue outline marks a cell that changed state since the previous summary;"
   print "<i>n/a</i> is a variant the project is not run against (project-variants.txt)."
   printf "Rows are ordered worst-first: failures in a released variant (%s), then in a development line, then warnings.\n", esc(RELNAMES)

@@ -156,17 +156,58 @@ if [[ -r "${mx}" ]]; then
       }
     }' "${mx}" | sort > "${cur}" 2>/dev/null || true
 
+  # When was each cell actually MEASURED? The rendered table cannot say: it
+  # carries a state per cell and nothing else, so a result from last night and
+  # one from twelve days ago look identical in the mail. They are not. The
+  # matrix is change-driven and worst-first, and a round that does not finish
+  # never reaches the tail of the project list -- measured on godestorm, the
+  # 2026-10-17 round spent 11:20 to 21:27 on five core projects out of eighty
+  # and the other seventy-five kept the cells of 2026-10-09..12. Reporting
+  # those as today's failures is what made the same projects "fail" every
+  # morning for a week, maven-clean-plugin among them, whose three red cells
+  # were the pre-fix 6-second abort of 10-10 while the three that happened to
+  # be rebuilt after the fix sat green next to them.
+  #
+  # The date lives in the cell file the matrix writes, so read it from there.
+  # One grep over all cell files, not one process per cell (~500 of them).
+  tsmap="/tmp/nsum-ts.$$"
+  find "${root}"/variants/*/cells -name '*.json' -print0 2>/dev/null \
+    | xargs -0 grep -H '"ts"' 2>/dev/null \
+    | awk -v pre="${root}/variants/" '
+        {
+          # <root>/variants/<variant>/cells/<project>.json:  "ts": "2026-10-10T05:11:43Z",
+          if (!match($0, /\.json:/)) next
+          path = substr($0, 1, RSTART + 4)
+          rest = substr($0, RSTART + 6)
+          if (!match(rest, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) next
+          day = substr(rest, RSTART, 10)
+          if (substr(path, 1, length(pre)) != pre) next
+          path = substr(path, length(pre) + 1)
+          n = index(path, "/cells/")
+          if (!n) next
+          variant = substr(path, 1, n - 1)
+          project = substr(path, n + 7)
+          sub(/\.json$/, "", project)
+          printf "%s\t%s\t%s\n", project, variant, day
+        }' > "${tsmap}" 2>/dev/null || : > "${tsmap}"
+
   # Merge with the previous snapshot into one table the renderers share:
-  #   project, variant, state, streak, changed, previous-state
+  #   project, variant, state, streak, changed, previous-state, measured-on
   # The streak is how many consecutive summaries the cell has held this state.
   # It is what lets a long-standing failure be told apart from a fresh one --
-  # a wall of red says nothing about which cell broke last night.
+  # a wall of red says nothing about which cell broke last night. It counts
+  # SUMMARIES, though, not measurements, so on a cell the matrix has not
+  # reached it counts mails; field 7 is what says which of the two it is.
   # A 3-column snapshot from before this change is read as streak 1.
-  awk -F'\t' -v snap="${snap}" '
+  awk -F'\t' -v snap="${snap}" -v tsmap="${tsmap}" '
     BEGIN {
       while ((getline line < snap) > 0) {
         n = split(line, f, "\t")
         if (n >= 3) { k = f[1] "\t" f[2]; old[k] = f[3]; st[k] = (n >= 4 && f[4] > 0 ? f[4] : 1) }
+      }
+      while ((getline line < tsmap) > 0) {
+        n = split(line, f, "\t")
+        if (n >= 3) meas[f[1] "\t" f[2]] = f[3]
       }
     }
     {
@@ -175,10 +216,11 @@ if [[ -r "${mx}" ]]; then
         if (old[k] == $3) { sk = st[k] + 1; ch = 0 } else { sk = 1; ch = 1 }
         pv = old[k]
       } else { sk = 1; ch = 0; pv = "-" }
-      printf "%s\t%s\t%s\t%d\t%d\t%s\n", $1, $2, $3, sk, ch, pv
+      printf "%s\t%s\t%s\t%d\t%d\t%s\t%s\n", $1, $2, $3, sk, ch, pv, (k in meas ? meas[k] : "-")
     }
   ' "${cur}" > "${cells}.$$" 2>/dev/null || true
   mkdir -p "${state_dir}" && mv -f "${cells}.$$" "${cells}" 2>/dev/null || true
+  rm -f "${tsmap}"
 
   # A snapshot from before the variant-name key held column INDICES in field
   # 2. Comparing the two would pit "1".."6" against variant names: nothing
@@ -243,6 +285,61 @@ if [[ -r "${mx}" ]]; then
     cut -f1-4 "${cells}" > "${snap}.$$" 2>/dev/null && mv -f "${snap}.$$" "${snap}" 2>/dev/null || true
   fi
   rm -f "${cur}"
+
+  # --- freshness ------------------------------------------------------------
+  # Without this the mail cannot be read correctly. "53 failed" invites the
+  # conclusion that 53 things broke, and the streak next to a cell reads as a
+  # build count. Both are wrong for any cell the matrix has not reached: its
+  # state is simply the last measurement, however old, and its streak counts
+  # the mails since. So say which cells were actually measured recently and
+  # which are only being repeated -- a stale red is a scheduling problem, a
+  # fresh red is a finding, and they need different work.
+  printf '\n  Freshness (a cell changes only when the matrix REACHES it):\n'
+  stale_list="/tmp/nsum-stale.$$"
+  awk -F'\t' -v today="$(date '+%F')" -v stale="${NSUM_STALE_DAYS:-3}" -v out="${stale_list}" '
+    function jdn(y, m, d,   a, yy, mm) {
+      a = int((14 - m) / 12); yy = y + 4800 - a; mm = m + 12 * a - 3
+      return d + int((153 * mm + 2) / 5) + 365 * yy \
+             + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045
+    }
+    function days_old(s,   p) {
+      if (length(s) != 10 || split(s, p, "-") != 3) return -1
+      return now - jdn(p[1] + 0, p[2] + 0, p[3] + 0)
+    }
+    BEGIN { split(today, t, "-"); now = jdn(t[1] + 0, t[2] + 0, t[3] + 0) }
+    {
+      state = $3; when = $7
+      # "none" and "excluded" are not measurements and have no cell file, so
+      # they belong in neither the fresh nor the stale bucket.
+      if (state == "none" || state == "excluded") { noresult++; next }
+      age = days_old(when)
+      if (age < 0) { undated++; next }
+      if (age <= 1) recent++; else if (age < stale) mid++; else old++
+      if (age >= stale && (state == "fail" || state == "warn" || state == "timeout"))
+        # Parenthesised: in a printf statement an unbracketed ">" is the
+        # redirection, so the last argument and the target would read as a
+        # comparison to anyone editing this later.
+        printf("%d\t      %-42s %-8s %-7s %s  (%d d)\n", age, $1, $2, state, when, age) > out
+    }
+    END {
+      printf "    measured today or yesterday:  %d cell(s)\n", recent + 0
+      if (mid)     printf "    measured 2-%d days ago:        %d cell(s)\n", stale - 1, mid
+      if (old)     printf "    not re-measured for %d+ days: %d cell(s)\n", stale, old
+      if (undated) printf "    no measurement date on file:  %d cell(s)\n", undated
+      if (noresult) printf "    no result yet / excluded:     %d cell(s)\n", noresult
+    }' "${cells}"
+  if [[ -s "${stale_list}" ]]; then
+    nstale=$(wc -l < "${stale_list}" | tr -d ' ')
+    printf '\n    Stale NOT-OK cells (%s), oldest first. Their streaks count mails,\n' "${nstale}"
+    printf '    not builds -- the matrix has not re-run these since:\n'
+    sort -rn "${stale_list}" | head -"${NSUM_STALE_LINES:-12}" | cut -f2-
+    [[ "${nstale}" -gt "${NSUM_STALE_LINES:-12}" ]] \
+      && printf '      ... and %s more (see var/nightly-summary-cells.tsv, field 7)\n' \
+                "$(( nstale - ${NSUM_STALE_LINES:-12} ))"
+  else
+    printf '    No stale failure -- every not-ok cell was measured recently.\n'
+  fi
+  rm -f "${stale_list}"
 
   # --- Upstream CI --------------------------------------------------------
   # Written by bin/ci-status (the nightly runs it; this only reads the file).
