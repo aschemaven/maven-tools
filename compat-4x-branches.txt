@@ -6,7 +6,8 @@
 #     plugins/core-4/maven-clean-plugin      plugins/core-4/maven-compiler-plugin
 #     plugins/core-4/maven-deploy-plugin     plugins/core-4/maven-install-plugin
 #     plugins/core-4/maven-resources-plugin  plugins/packaging-4/maven-jar-plugin
-#     plugins/packaging-4/maven-source-plugin  shared-4/filtering
+#     plugins/packaging-4/maven-source-plugin  shared-4/archiver
+#     shared-4/filtering                       plugins/tools-4/plugin-tools
 # Those need NOTHING here.
 #
 # This file lists the REMAINING 4.x lines that have NO "-4" manifest entry, so
@@ -24,7 +25,14 @@
 # than master; site's 4.x line may live on master while its 3.x line is a -3.x
 # branch. Confirm with `git -C maven/<project> branch -r` before trusting a row.
 
+# plugins/tools/plugin-tools was listed here with "master" as its 4.x branch.
+# apache/maven-sources#57 (manifest 904b244, synced 2026-10-22) made that row
+# both obsolete and wrong: the manifest now checks the 4.x line out directly as
+# plugins/tools-4/plugin-tools (master, 4.0.0-beta-4-SNAPSHOT), and pins
+# plugins/tools/plugin-tools to maven-plugin-tools-3.x (3.17.0-SNAPSHOT). Left
+# standing, the row would build the Maven 4 line a second time in a throwaway
+# worktree -- and read the 3.x checkout as if it were the 4.x one.
+#
 # project-path                          4x-branch   (VERIFY each!)
 plugins/core/maven-site-plugin          master
-plugins/tools/plugin-tools              master
 shared/reporting-impl                   master

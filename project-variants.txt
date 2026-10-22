@@ -74,3 +74,18 @@ plugins/packaging-4/maven-jar-plugin     m4-rc7 m4-40x m4-41x
 plugins/packaging-4/maven-source-plugin  m4-rc7 m4-40x m4-41x
 shared-4/archiver                        m4-rc7 m4-40x m4-41x
 shared-4/filtering                       m4-rc7 m4-40x m4-41x
+
+# plugins/tools-4 arrived with apache/maven-sources#57 (manifest commit
+# 904b244, synced here 2026-10-22). That issue swapped the branch names on the
+# nine repositories that keep a Maven 3 and a Maven 4 line -- master became
+# <component>-4.x and <component>-3.x became master -- so that the DEFAULT
+# branch is the Maven 3 line everywhere, as the project intends. The manifest
+# paths keep their meaning (plugins/core/* is Maven 3, plugins/core-4/* is
+# Maven 4), so nothing above had to move.
+#
+# plugin-tools was the exception: its master already WAS the Maven 4 line, so
+# instead of a rename it got a second checkout. Measured after the sync:
+#   plugins/tools/plugin-tools    maven-plugin-tools-3.x   3.17.0-SNAPSHOT
+#   plugins/tools-4/plugin-tools  master                   4.0.0-beta-4-SNAPSHOT
+# Same criterion as the block above, so the same restriction.
+plugins/tools-4/plugin-tools             m4-rc7 m4-40x m4-41x
