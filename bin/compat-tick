@@ -179,16 +179,24 @@ changed_variants=$(diff_keys "${prev_vars}" "${current_vars}")
 echo "compat-tick: role=${role} changed-components=[${changed_components% }] changed-variants=[${changed_variants% }]"
 
 # --- 3+4. rebuild affected cells ------------------------------------------
-invalidate_cells() {  # <components> <variants>
-  local comps="$1" vars="$2" v c f
-  for v in ${vars}; do
-    for c in ${comps}; do
-      f="$(variant_root "${v}")/cells/${c}.json"
-      [[ -f "${f}" ]] && rm -f "${f}"
-    done
-  done
-  return 0   # never let a missing-file [[ -f ]] leave a non-zero exit (set -e)
-}
+# No invalidation step any more, deliberately -- this is where the gaps in the
+# table came from. It deleted every cell of the batch UP FRONT, so a round over
+# forty components blanked 240 cells at once and refilled them over the next
+# ten hours; a round that was interrupted left them blank until some later
+# round happened to reach them. Measured 2026-10-22 on
+# plugins/core/maven-compiler-plugin: five of six cell files gone, one rebuilt.
+#
+# The reasoning behind it was that a stale result is worse than no result.
+# That was true while a cell said only "fail" -- it is not true now that it
+# carries "ts" and "head_commit" and the renderers show the measurement date
+# (52df101). A dated old result tells the reader what was last measured and
+# when; a gap tells them nothing at all, and cannot be told apart from a cell
+# that has never been measured. So let run-compat-matrix OVERWRITE each cell
+# as it finishes it, and leave the previous measurement standing until then.
+#
+# The two removals inside run-compat-matrix stay: a variant the project is no
+# longer run against, and rc=2 (nothing was executed). Both mean the cell has
+# no meaning any more, which is a different thing from "not measured lately".
 list_minus() {  # items in $1 that are not in $2
   comm -23 <(printf '%s\n' $1 | sort -u) <(printf '%s\n' $2 | sort -u) | tr '\n' ' '
 }
@@ -199,7 +207,6 @@ elif should_build; then
   # Rule (a): changed components x all variants.
   if [[ -n "${changed_components// /}" ]]; then
     echo "compat-tick: rule (a) -> [${changed_components% }] x all variants"
-    invalidate_cells "${changed_components}" "${all_variants}"
     VARIANTS="${all_variants}" PROJECTS="${changed_components}" \
       MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
   fi
@@ -208,7 +215,6 @@ elif should_build; then
     rb=$(list_minus "${all_components}" "${changed_components}")
     if [[ -n "${rb// /}" ]]; then
       echo "compat-tick: rule (b) -> all-minus-changed x [${changed_variants% }]"
-      invalidate_cells "${rb}" "${changed_variants}"
       VARIANTS="${changed_variants}" PROJECTS="${rb}" \
         MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
     fi
