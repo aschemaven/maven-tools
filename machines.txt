@@ -16,7 +16,22 @@
 godecane          controller
 # intel-macbook   runner
 # linux-laptop    runner
-# Builds in its own window (see the launchd plist there): the jQAssistant
-# nightly runs 03:00 to about 15:00 on this machine, so the matrix window
-# is shifted out of its way and compat-tick yields to the nightly lock.
-godestorm         controller
+# The dedicated builder, so "runner": it builds whenever the tick fires.
+#
+# It was a "controller" with its window shifted to 11-19 (NIGHTLY_START /
+# NIGHTLY_END in the launchd plist there), on the assumption that the
+# jQAssistant nightly occupies 03:00 to about 15:00. That has not been true
+# for a while -- measured over 2026-10-16..18 the nightly runs 21:00 to about
+# 04:30 -- so the shifted window cost the machine the sixteen hours outside
+# 11-19 while nothing else wanted them. On the night of 10-21, with the
+# nightly dead, the matrix covered more cells than in the whole week before.
+#
+# Yielding to the nightly does not depend on the role: should_build() checks
+# the .jqa-nightly.lock BEFORE it looks at the role, so a runner stands aside
+# exactly as a controller does. What the role drops is the time window and the
+# HID-idle test, neither of which means anything on a box nobody types on
+# (measured idle there: 5.1 days).
+#
+# The window variables stay in the plist but are now unread. They apply again
+# the moment this row says "controller" or COMPAT_ROLE overrides it.
+godestorm         runner

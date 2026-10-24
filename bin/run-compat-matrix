@@ -336,6 +336,19 @@ build_component_row() {
     printf '%s\n' "$(cat "${tmp}")"
     rm -f "${tmp}"
   done
+  # This row is finished. Record it, so an interrupted round still counts as
+  # progress: compat-tick folds this file into its baseline at the START of the
+  # next tick, which is the only place that survives the round being killed
+  # outright (launchd bootout takes the whole process tree, so nothing after
+  # the round returns ever runs). Reached only by falling out of the loop --
+  # the should_yield branch above returns early and is deliberately NOT
+  # recorded, because that row is incomplete.
+  #
+  # Append of one short line, safe under run_parallel: writes below the pipe
+  # buffer are not interleaved, and compat-tick folds by key anyway.
+  if [[ -n "${MATRIX_DONE_LOG:-}" && -n "${head_commit}" ]]; then
+    printf '%s\t%s\n' "${project}" "${head_commit}" >> "${MATRIX_DONE_LOG}" || true
+  fi
 }
 
 echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over components)"

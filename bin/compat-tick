@@ -57,6 +57,11 @@ state_dir="${root}/var"
 mkdir -p "${state_dir}"
 heads_state="${state_dir}/tick-heads.tsv"
 vars_state="${state_dir}/tick-variants.tsv"
+# What the LAST round actually finished, one "component <TAB> head" per row,
+# appended by run-compat-matrix as each row completes. Folded into the baseline
+# at the start of this tick; see the merge below.
+done_log="${state_dir}/tick-done.tsv"
+export MATRIX_DONE_LOG="${done_log}"
 
 host=$(hostname -s 2>/dev/null || hostname || echo unknown)
 
@@ -161,6 +166,34 @@ for v in ${all_variants}; do
 done
 sort -o "${current_vars}" "${current_vars}"
 
+# Fold in what the previous round finished, BEFORE diffing against it.
+#
+# The change set used to be consumed by a single "mv -f" after both rounds, so
+# a round that did not reach that line counted for nothing: the 2026-10-17
+# round built five core projects over ten hours, was cut off at 21:00 by the
+# nightly, and the next day started again at the first of those five. The same
+# five were rebuilt every day for a week while seventy-five others were never
+# reached -- which is what froze most of the table.
+#
+# Doing it here, from a file on disk, is what makes it survive. Nothing that
+# runs after the round can be relied on: a launchd bootout kills the whole
+# process tree, and that is also how an operator stops a runaway round.
+if [[ -s "${done_log}" ]]; then
+  _base="${heads_state}"; [[ -r "${_base}" ]] || _base=/dev/null
+  if awk -F'\t' -v donef="${done_log}" '
+       FILENAME == donef { d[$1] = $2; next }
+       { if ($1 in d) { printf "%s\t%s\n", $1, d[$1]; delete d[$1] } else print }
+       END { for (k in d) printf "%s\t%s\n", k, d[k] }
+     ' "${done_log}" "${_base}" | sort > "${heads_state}.$$"; then
+    mv -f "${heads_state}.$$" "${heads_state}"
+    echo "compat-tick: carried over $(wc -l < "${done_log}" | tr -d ' ') component(s) finished by the previous round"
+  else
+    rm -f "${heads_state}.$$"
+  fi
+  rm -f "${done_log}"
+  unset _base
+fi
+
 prev_heads="${heads_state}"; [[ -r "${prev_heads}" ]] || prev_heads=/dev/null
 prev_vars="${vars_state}";   [[ -r "${prev_vars}"  ]] || prev_vars=/dev/null
 # Print first-column keys whose value changed or is new. Distinguish the two
@@ -219,9 +252,16 @@ elif should_build; then
         MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
     fi
   fi
-  # Consume the change set only after a successful build round.
+  # A round that ran to the end consumes the whole change set, as before. The
+  # per-component fold above is for the rounds that do NOT get here.
+  #
+  # Variants stay all-or-nothing: a variant is only finished once every
+  # component has been built against it, so there is no half-way state to
+  # record. Rule (b) is also the rare case -- it fires when a Maven version
+  # moves, not when a component does.
   mv -f "${current_heads}" "${heads_state}"
   mv -f "${current_vars}"  "${vars_state}"
+  rm -f "${done_log}"
 else
   echo "compat-tick: role '${role}' not building now (outside nightly+idle; FORCE_BUILD=true to override)."
   echo "compat-tick: would rebuild components=[${changed_components% }] variants=[${changed_variants% }]"
