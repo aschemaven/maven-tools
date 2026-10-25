@@ -89,7 +89,12 @@ source "${dir}/common-functions.sh"
 # lock would otherwise silence every future tick forever -- the same shape of
 # failure as the six days of "FAILED: publish" mails.
 lock="${root}/.compat-matrix.lock"
-if ! mkdir "${lock}" 2>/dev/null; then
+if [[ "${MATRIX_PRINT_ORDER:-false}" == "true" ]]; then
+  # A dry run builds nothing, so it neither takes the lock nor waits for one.
+  # Without this it would exit 0 and silently print nothing while a round is
+  # active -- which is exactly when you want to ask what the order will be.
+  lock=""
+elif ! mkdir "${lock}" 2>/dev/null; then
   lock_pid=$(cat "${lock}/pid" 2>/dev/null || echo "")
   if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null; then
     echo "run-compat-matrix: another run is active (pid ${lock_pid}); exiting" >&2
@@ -99,7 +104,9 @@ if ! mkdir "${lock}" 2>/dev/null; then
   rm -rf "${lock}"
   mkdir "${lock}" 2>/dev/null || { echo "run-compat-matrix: cannot acquire ${lock}; exiting" >&2; exit 0; }
 fi
-echo "$$" > "${lock}/pid"
+if [[ -n "${lock}" ]]; then
+  echo "$$" > "${lock}/pid"
+fi
 # This script forks subshells of itself (visible as sibling run-compat-matrix
 # processes in ps). Bash resets traps in a subshell, but the pid check makes
 # that guarantee explicit rather than relied upon: only the owner releases.
@@ -183,6 +190,74 @@ read -r -a matrix_projects <<< "${PROJECTS}"
 
 host=$(hostname -s 2>/dev/null || hostname || echo unknown)
 
+# Coverage first, then the stalest.
+#
+# PROJECTS arrives alphabetically -- compat-tick builds its change set with
+# comm(1) over sorted lists -- and the alphabet opens with the six most
+# expensive components we have. Measured over 268 timed cells: core/maven
+# averages 67 min per cell (6.7 h for one row), core/build-cache 50 min, and
+# the five costliest components together take 46% of all build time, while the
+# median component needs 2.6 min per cell. A round therefore spent every
+# window it ever got inside core/ and never reached the tail: on 2026-10-24,
+# 64 of 122 rows had never been measured even once, among them 42 of the 44
+# plugins that apache/maven-dist-tool reports on. That is not a capacity
+# problem. At the median, the whole uncovered backlog is about 17 h of builds.
+#
+# So order by what the round still owes the table:
+#   bucket 0  a cell is missing for some variant -- most missing first, so the
+#             rows that add the most coverage per row go first
+#   bucket 1  the row is complete -- oldest measurement first, so re-measuring
+#             refreshes the stalest data rather than the alphabetically first
+#
+# Every cell therefore gets measured once before any cell gets measured twice.
+# Set MATRIX_NO_REORDER=true to keep the caller's order.
+order_projects() {
+  local p v cell ts missing oldest bucket key2 tmpf
+  tmpf=$(mktemp)
+  for p in "${matrix_projects[@]}"; do
+    missing=0
+    oldest="9999-99-99"
+    for v in "${matrix_variants[@]}"; do
+      variant_exists "${v}" || continue
+      project_allows_variant "${p}" "${v}" || continue
+      cell="$(variant_root "${v}")/cells/${MATRIX_NS:+${MATRIX_NS}/}${p}.json"
+      if [[ -r "${cell}" ]]; then
+        ts=$(sed -nE 's/.*"ts":[[:space:]]*"([0-9-]{10}).*/\1/p' "${cell}" | head -1)
+        [[ -n "${ts}" && "${ts}" < "${oldest}" ]] && oldest="${ts}"
+      else
+        missing=$((missing + 1))
+      fi
+    done
+    if [[ "${missing}" -gt 0 ]]; then
+      bucket=0
+      # 99-missing so that a bigger gap sorts first under one ascending sort.
+      key2=$(printf '%02d' $((99 - missing)))
+    else
+      bucket=1
+      key2="${oldest}"
+    fi
+    printf '%d\t%s\t%s\n' "${bucket}" "${key2}" "${p}" >> "${tmpf}"
+  done
+  sort -t"$(printf '\t')" -k1,1n -k2,2 -k3,3 "${tmpf}" | cut -f3
+  rm -f "${tmpf}"
+}
+
+if [[ "${MATRIX_NO_REORDER:-false}" != "true" && "${#matrix_projects[@]}" -gt 1 ]]; then
+  _ordered=()
+  while IFS= read -r _p; do
+    [[ -n "${_p}" ]] && _ordered+=("${_p}")
+  done < <(order_projects)
+  [[ "${#_ordered[@]}" -eq "${#matrix_projects[@]}" ]] && matrix_projects=("${_ordered[@]}")
+  unset _ordered _p
+fi
+
+# What this round would do, without doing it. The order is now the whole point
+# of the round, so it has to be inspectable before hours of builds start.
+if [[ "${MATRIX_PRINT_ORDER:-false}" == "true" ]]; then
+  printf '%s\n' "${matrix_projects[@]}"
+  exit 0
+fi
+
 # Materialise the locally built Maven distributions before binding variants.
 # install-maven-dist only unpacks an apache-maven -bin.zip that a build has
 # already left behind, and it skips when the source commit has not moved --
@@ -253,6 +328,21 @@ done
 # isolated-m2-projects.txt cover that (same caveat as parallel run-maven).
 # Each cell prints its console output as ONE printf line so concurrent rows
 # stay intact.
+
+# Record a finished row, so an interrupted round still counts as progress:
+# compat-tick folds this file into its baseline at the START of the next tick,
+# which is the only place that survives the round being killed outright
+# (launchd bootout takes the whole process tree, so nothing after the round
+# returns ever runs).
+#
+# Append of one short line, safe under run_parallel: writes below the pipe
+# buffer are not interleaved, and compat-tick folds by key anyway.
+record_row_done() {
+  if [[ -n "${MATRIX_DONE_LOG:-}" && -n "$2" ]]; then
+    printf '%s\t%s\n' "$1" "$2" >> "${MATRIX_DONE_LOG}" || true
+  fi
+}
+
 build_component_row() {
   local project="$1"
   local cell_goals cell_task
@@ -262,6 +352,24 @@ build_component_row() {
   local head_commit
   head_commit=$(git -C "${project_dir}" rev-parse --short HEAD 2>/dev/null || echo "")
   local variant v_root i=0 tmp cell_log result btime ts cell_file
+
+  # No pom.xml means this is not a Maven project, and exec_mvn declines to run
+  # it -- but it returns 0 doing so, and the code below then wrote a cell
+  # anyway: no log, no duration, and a status left over from whatever ran
+  # before. Measured on 2026-10-24, that was 33 cells across six rows, and the
+  # status was arbitrary -- the same row read ok, warn or fail depending on the
+  # column, which cost us 12 of 40 red cells and 12 green ones that measured
+  # nothing. Drop any such cell and skip the row. The row is still recorded as
+  # done: there is genuinely nothing here to build, now or next round.
+  if [[ ! -r "${project_dir}/pom.xml" ]]; then
+    echo "${project}: no pom.xml -- not a Maven project, no cells written"
+    for variant in "${matrix_variants[@]}"; do
+      variant_exists "${variant}" || continue
+      rm -f "$(variant_root "${variant}")/cells/${MATRIX_NS:+${MATRIX_NS}/}${project}.json"
+    done
+    record_row_done "${project}" "${head_commit}"
+    return 0
+  fi
   for variant in "${matrix_variants[@]}"; do
     variant_exists "${variant}" || continue
     # A project may be restricted to a subset of variants. Any cell left over
@@ -336,19 +444,10 @@ build_component_row() {
     printf '%s\n' "$(cat "${tmp}")"
     rm -f "${tmp}"
   done
-  # This row is finished. Record it, so an interrupted round still counts as
-  # progress: compat-tick folds this file into its baseline at the START of the
-  # next tick, which is the only place that survives the round being killed
-  # outright (launchd bootout takes the whole process tree, so nothing after
-  # the round returns ever runs). Reached only by falling out of the loop --
-  # the should_yield branch above returns early and is deliberately NOT
-  # recorded, because that row is incomplete.
-  #
-  # Append of one short line, safe under run_parallel: writes below the pipe
-  # buffer are not interleaved, and compat-tick folds by key anyway.
-  if [[ -n "${MATRIX_DONE_LOG:-}" && -n "${head_commit}" ]]; then
-    printf '%s\t%s\n' "${project}" "${head_commit}" >> "${MATRIX_DONE_LOG}" || true
-  fi
+  # This row is finished. Reached only by falling out of the loop -- the
+  # should_yield branch above returns early and is deliberately NOT recorded,
+  # because that row is incomplete.
+  record_row_done "${project}" "${head_commit}"
 }
 
 echo "Matrix: ${#matrix_variants[@]} variant(s) x ${#matrix_projects[@]} project(s) = ${total} cell(s); goals: ${MATRIX_GOALS}; PARALLEL_JOBS=${PARALLEL_JOBS} (over components)"
