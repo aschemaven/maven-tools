@@ -30,6 +30,9 @@ set -eu -o pipefail
 #   FORCE_BUILD      true to bypass controller nightly/idle gating
 #   NIGHTLY_START    nightly window start hour, local (default 0)
 #   NIGHTLY_END      nightly window end hour,   local (default 6)
+#   NIGHTLY_LEAD_MIN do not start a round within this many minutes of the
+#                    nightly's next launch (default 90; 0 disables)
+#   NIGHTLY_PLIST    launchd job that fires the nightly, read for its hour
 #   IDLE_MIN_SECONDS minimum HID idle before a controller builds (default 600)
 #   COMPAT_SYNC      auto (default; sync only real repo trees) | false
 #   MATRIX_GOALS     goals per cell (default "-Prun-its clean verify")
@@ -43,6 +46,8 @@ source "${dir}/common-functions.sh"
 : "${FORCE_BUILD:=false}"
 : "${NIGHTLY_START:=0}"
 : "${NIGHTLY_END:=6}"
+: "${NIGHTLY_LEAD_MIN:=90}"
+: "${NIGHTLY_PLIST:=${HOME}/Library/LaunchAgents/net.aschemann.jqa-nightly.plist}"
 : "${IDLE_MIN_SECONDS:=600}"
 : "${COMPAT_SYNC:=auto}"
 : "${MATRIX_GOALS:=-Prun-its clean verify}"
@@ -99,6 +104,26 @@ in_nightly_window() {
 nightly_running() {
   [[ -d "${root}/.jqa-nightly.lock" ]]
 }
+# Minutes until the nightly's next launch, from the launchd job that actually
+# fires it. Returns non-zero when that cannot be read, which DISABLES the lead
+# guard rather than guessing an hour.
+#
+# The installed plist, not launchd/*.template: the template says hour 3 and
+# godestorm's installed copy says 21, and it is the installed one that fires.
+nightly_due_in() {
+  local hour minute now due
+  [[ -r "${NIGHTLY_PLIST}" ]] || return 1
+  hour=$(/usr/libexec/PlistBuddy -c 'Print :StartCalendarInterval:Hour' \
+         "${NIGHTLY_PLIST}" 2>/dev/null) || return 1
+  [[ "${hour}" =~ ^[0-9]+$ ]] || return 1
+  minute=$(/usr/libexec/PlistBuddy -c 'Print :StartCalendarInterval:Minute' \
+           "${NIGHTLY_PLIST}" 2>/dev/null)
+  [[ "${minute}" =~ ^[0-9]+$ ]] || minute=0
+  now=$(( $((10#$(date +%H))) * 60 + $((10#$(date +%M))) ))
+  due=$(( hour * 60 + minute ))
+  (( due <= now )) && due=$(( due + 1440 ))
+  echo $(( due - now ))
+}
 # A matrix already in flight must be detected HERE and not only inside
 # run-compat-matrix. The change set below is consumed with "mv -f" after the
 # build round returns; a matrix that exits 0 because it was locked out would
@@ -124,6 +149,21 @@ should_build() {
   if ${FORCE_BUILD}; then return 0; fi
   if nightly_running; then
     echo "compat-tick: jqa-nightly is running; skipping the build"
+    return 1
+  fi
+  # Yielding is not enough on its own. run-compat-matrix stands down for the
+  # nightly BETWEEN cells, and a single cell may run up to MATRIX_CELL_TIMEOUT
+  # -- three hours by default, and plugins/core/surefire really does take 98
+  # minutes. So a round begun shortly before the launch still owns the machine
+  # well into the night: measured 2026-10-07, a matrix started 16:55 was still
+  # going 16 hours later and the nightly's build stage needed 11 hours for
+  # work that takes under one on an idle box. Not starting is the only guard
+  # that acts in time; the lead must therefore cover a long cell, not a short
+  # one.
+  local due=""
+  if [[ "${NIGHTLY_LEAD_MIN}" -gt 0 ]] && due=$(nightly_due_in) \
+     && [[ "${due}" -le "${NIGHTLY_LEAD_MIN}" ]]; then
+    echo "compat-tick: jqa-nightly launches in ${due} min (lead ${NIGHTLY_LEAD_MIN}); not starting a round"
     return 1
   fi
   if [[ "${role}" == "runner" ]]; then return 0; fi
@@ -237,19 +277,33 @@ list_minus() {  # items in $1 that are not in $2
 if [[ -z "${changed_components// /}" && -z "${changed_variants// /}" ]]; then
   echo "compat-tick: nothing changed; re-rendering only."
 elif should_build; then
+  # 75 is EX_TEMPFAIL: run-compat-matrix's cooperative yield, not a failure.
+  # It was never handled here. Under errexit the bare calls below aborted the
+  # whole tick on it, which did keep the change set -- the contract the matrix
+  # documents at its own exit -- but only by accident, and it also skipped the
+  # render in step 5 and left launchd recording a failed tick. So every yield
+  # froze reports/compat-matrix.md and reports/compat-drift.md until some
+  # later round happened to run to the end, and the tick log simply stopped
+  # mid-sentence. Handle the code: keep the change set, skip rule (b), and go
+  # on to render.
+  round_rc=0
   # Rule (a): changed components x all variants.
   if [[ -n "${changed_components// /}" ]]; then
     echo "compat-tick: rule (a) -> [${changed_components% }] x all variants"
     VARIANTS="${all_variants}" PROJECTS="${changed_components}" \
-      MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
+      MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix" || round_rc=$?
+    # Any other non-zero keeps aborting the tick, exactly as before.
+    [[ "${round_rc}" -eq 0 || "${round_rc}" -eq 75 ]] || exit "${round_rc}"
   fi
   # Rule (b): changed variants x all components (minus the overlap already done).
-  if [[ -n "${changed_variants// /}" ]]; then
+  # Not after a yield: the machine was just handed to the nightly.
+  if [[ "${round_rc}" -ne 75 && -n "${changed_variants// /}" ]]; then
     rb=$(list_minus "${all_components}" "${changed_components}")
     if [[ -n "${rb// /}" ]]; then
       echo "compat-tick: rule (b) -> all-minus-changed x [${changed_variants% }]"
       VARIANTS="${changed_variants}" PROJECTS="${rb}" \
-        MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix"
+        MAVEN_PROJECTS_DIR="${MAVEN_PROJECTS_DIR}" "${dir}/run-compat-matrix" || round_rc=$?
+      [[ "${round_rc}" -eq 0 || "${round_rc}" -eq 75 ]] || exit "${round_rc}"
     fi
   fi
   # A round that ran to the end consumes the whole change set, as before. The
@@ -259,9 +313,16 @@ elif should_build; then
   # component has been built against it, so there is no half-way state to
   # record. Rule (b) is also the rare case -- it fires when a Maven version
   # moves, not when a component does.
-  mv -f "${current_heads}" "${heads_state}"
-  mv -f "${current_vars}"  "${vars_state}"
-  rm -f "${done_log}"
+  if [[ "${round_rc}" -eq 75 ]]; then
+    # The rows this round did finish are in ${done_log}; the next tick folds
+    # them into the baseline, so the change set shrinks instead of restarting.
+    echo "compat-tick: round yielded before completing; change set kept for the next tick"
+    rm -f "${current_heads}" "${current_vars}"
+  else
+    mv -f "${current_heads}" "${heads_state}"
+    mv -f "${current_vars}"  "${vars_state}"
+    rm -f "${done_log}"
+  fi
 else
   echo "compat-tick: role '${role}' not building now (outside nightly+idle; FORCE_BUILD=true to override)."
   echo "compat-tick: would rebuild components=[${changed_components% }] variants=[${changed_variants% }]"
