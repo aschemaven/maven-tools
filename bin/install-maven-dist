@@ -95,6 +95,27 @@ dist_commit() {
   printf '%s' "${out}" | sed -n '1s/.*(\([0-9a-f]\{40\}\)).*/\1/p'
 }
 
+# A refresh REPLACES a distribution directory: mv the old one aside, mv the new
+# one in, rm -rf the old. A matrix cell whose JVM is loading classes out of
+# that directory does not survive having it deleted underneath -- any jar it
+# has not opened yet is simply gone.
+#
+# run-compat-matrix calls this script itself, after taking the lock but before
+# its first cell, which is the safe moment; the lock's pid is then our own
+# parent and we proceed. A run started ALONGSIDE an active round is the unsafe
+# case and stops here. Measured 2026-10-27: a manual refresh at 20:34 swapped
+# three distributions while a round was mid-cell. The cell in flight happened
+# to be on a release column, which is never touched, so nothing broke.
+matrix_active_elsewhere() {
+  local lp
+  [[ -d "${root}/.compat-matrix.lock" ]] || return 1
+  lp=$(cat "${root}/.compat-matrix.lock/pid" 2>/dev/null || echo "")
+  [[ -n "${lp}" ]] || return 1
+  kill -0 "${lp}" 2>/dev/null || return 1      # stale lock, nobody is running
+  [[ "${lp}" == "${PPID}" ]] && return 1       # our own caller
+  return 0
+}
+
 rc=0
 
 while read -r version project branch rest; do
@@ -142,10 +163,18 @@ while read -r version project branch rest; do
     refresh="forced"
   elif [[ ! -x "${dist}/bin/mvn" ]]; then
     refresh="not installed yet"
-  elif [[ -n "${archive}" && "${archive}" -nt "${dist}/bin/mvn" ]]; then
-    # An archive younger than the installed distribution is a rebuild we have
-    # not taken. This condition alone would have caught the m4-40x case, and
-    # it needs nothing from the distribution's version string.
+  elif [[ -n "${archive}" && ( ! -e "${dist}/.unpacked-at" || "${archive}" -nt "${dist}/.unpacked-at" ) ]]; then
+    # An archive younger than the last unpack is a rebuild we have not taken.
+    # This condition alone would have caught the m4-40x case, and it needs
+    # nothing from the distribution's version string.
+    #
+    # Against .unpacked-at, which we touch at unpack time, and NOT against
+    # anything inside the distribution: unzip restores the timestamps stored
+    # in the archive, so dists/4.0.0-SNAPSHOT/bin/mvn is dated Sep 22 while
+    # the archive that delivered it is dated Oct 27. Comparing the two made
+    # "archive is newer" permanently true and re-unpacked every distribution
+    # on every run -- measured the same evening this check was written, by
+    # watching 4.0.0-SNAPSHOT get unpacked twice within fifteen minutes.
     refresh="archive rebuilt $(date -r "${archive}" '+%F %T')"
   elif [[ -n "${commit}" && -n "${installed}" && "${commit}" != "${installed}" ]]; then
     # Behind the source, with no newer archive to fix it: only a build can,
@@ -159,6 +188,10 @@ while read -r version project branch rest; do
   else
     echo "[$(stamp)] ${version}: unchanged (${installed:0:8}) -- nothing to do"
     continue
+  fi
+  if matrix_active_elsewhere; then
+    echo "[$(stamp)] ${version}: needs a refresh (${refresh}) but a compat matrix is running (pid $(cat "${root}/.compat-matrix.lock/pid" 2>/dev/null)); not swapping it now" >&2
+    rc=1; continue
   fi
   echo "[$(stamp)] ${version}: refreshing -- ${refresh}"
 
@@ -182,6 +215,9 @@ while read -r version project branch rest; do
   [[ -x "${dist}.new/bin/mvn" ]] || { echo "[$(stamp)] ${version}: no bin/mvn in archive" >&2; rm -rf "${dist}.new"; rc=1; continue; }
 
   [[ -n "${commit}" ]] && echo "${commit}" > "${dist}.new/.source-commit"
+  # The mtime of this file is "when we last took an archive". Created before
+  # the swap, so it dates the unpack and not some later directory operation.
+  : > "${dist}.new/.unpacked-at"
   rm -rf "${dist}.prev"
   [[ -d "${dist}" ]] && mv "${dist}" "${dist}.prev"
   mv "${dist}.new" "${dist}"
