@@ -28,6 +28,25 @@
 core/maven-4.0.x   -Prun-its clean install
 core/maven         -Prun-its clean install
 core/3.x/maven-3   -Prun-its clean install
+# The same rule, for two components that were never added here.
+#
+# core/3.x/its-3 is the Maven 3.x core IT suite -- the same shape as the three
+# above. Measured 2026-10-27: with `verify` it reports
+# "Tests run: 877, Failures: 10, Errors: 605" on all three 3.x columns, every
+# error tracing back to maven-it-plugin-bootstrap:2.1-SNAPSHOT being absent
+# inside the fork. Its own README documents `mvn clean install -Prun-its`.
+#
+# plugins/core/surefire is the same cause by a different route: its ITs invoke
+# maven-surefire-report-plugin:3.6.2-SNAPSHOT by absolute GAV
+# (SurefireLauncher.java:352), and surefire-shadefire likewise. invoker:install
+# stages only surefire-its' dependency closure (28 artefacts, measured), which
+# contains neither, so 26 of 800 ITs fail identically on all three Maven 3
+# columns. Maven 4 masks it by resolving them from
+# .mvn/target/project-local-repo, which Maven 3 has no equivalent of -- which is
+# why the Maven 3 columns looked worse than the Maven 4 ones for the wrong
+# reason. Upstream CI uses `clean install -nsu -P run-its`.
+core/3.x/its-3     -Prun-its clean install
+plugins/core/surefire  -Prun-its clean install
 
 # No entry is needed for a project that declares no run-its profile (such as
 # plexus-compiler, whose ITs are bound to verify unconditionally): exec_mvn
