@@ -27,3 +27,13 @@ core/maven-4.0.x -Dsurefire.timeout=600
 core/3.x/its-3 -Dsurefire.timeout=600
 core/3.x/mvnd-1 -Dsurefire.timeout=600
 core/mvnd -Dsurefire.timeout=600
+
+# E2ETest is a throughput benchmark, not a correctness test: it asserts that a
+# writer thread completes 400k encode calls inside a 30s latch. Upstream calls
+# it flaky itself (b2d4904bd, 2026-03-12, "relax timeout which makes test
+# really flaky") and tripled a sibling limit rather than fix it. Measured here:
+# it FAILED on 4 of 5 columns at ~36s during the loaded 2026-10-26 sweep and
+# PASSED on all 5 at ~13s on a quiet box. It sits in module 12 of 17, so it
+# stops the reactor before maven-surefire-its -- the only module in this
+# component that measures Maven compatibility at all.
+plugins/core/surefire -Dsurefire.excludes=**/E2ETest.java
