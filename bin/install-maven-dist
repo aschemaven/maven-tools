@@ -21,10 +21,24 @@ set -eu -o pipefail
 #     builds anyway, and their apache-maven module leaves a -bin.zip behind. This
 #     only materialises it.
 #
-#     Change detection is by SOURCE COMMIT, not by timestamp: the recorded commit
-#     is written next to the unpacked distribution and compared on the next run.
-#     A rebuild that produced identical output therefore costs nothing, and a
-#     touched archive does not trigger needless work.
+#     Change detection asks the INSTALLED DISTRIBUTION what it is, and compares
+#     that against the source HEAD and against the archive's mtime. It does not
+#     trust the .source-commit marker beside the distribution, which records the
+#     source HEAD at UNPACK time and therefore cannot tell "built from this
+#     commit" from "unpacked while the tree happened to be at this commit": an
+#     archive rebuilt later at the same HEAD matches the marker and is never
+#     taken, so the distribution keeps the commit the EARLIER archive was built
+#     from, for ever, while every run reports "unchanged".
+#
+#     Measured 2026-10-27 on 4.0.0-SNAPSHOT (matrix column m4-40x): marker and
+#     HEAD both f116c1f2, a fresh archive sitting in target/ since 15:17 the
+#     same day, and "mvn -v" in the installed distribution reporting
+#     44add5211 -- 127 commits and six weeks behind. 3.10.1-SNAPSHOT (m3-10x)
+#     had drifted the same way, 3d91fd38 against a HEAD of 23da179b. Both
+#     columns were measuring a Maven nobody had asked for.
+#
+#     The marker is still written, as provenance for the reader. Nothing
+#     decides anything by it any more.
 #
 #     The unpacked distribution lives in a stable location under
 #     MAVEN_TOOLS_CACHE/dists/ rather than in the project's target/, because a
@@ -34,7 +48,7 @@ set -eu -o pipefail
 #     a half-extracted distribution behind.
 #
 # OPTIONS
-#     --force     re-unpack even when the source commit is unchanged
+#     --force     re-unpack even when the distribution is already current
 #
 # ENVIRONMENT
 #     MAVEN_PROJECTS_DIR  source tree holding the components (default: maven)
@@ -65,6 +79,22 @@ sdk_dir="${HOME}/.sdkman/candidates/maven"
 mkdir -p "${dists_dir}"
 
 stamp() { date '+%F %T'; }
+
+# The commit a built distribution carries, or empty when it reports none
+# (master's 4.1.0-SNAPSHOT build does exactly that -- "mvn -v" prints the
+# version with no hash at all, so this check is simply unavailable there and
+# the archive mtime below is the only guard that applies).
+#
+# Captured whole and sliced afterwards, never "mvn -v | head -1": the pipe
+# closes under Maven and pipefail turns the SIGPIPE into a failure. Same
+# defect as the one described at the bottom of this file.
+dist_commit() {
+  local d="${1}" out
+  [[ -x "${d}/bin/mvn" ]] || return 0
+  out=$("${d}/bin/mvn" -v 2>/dev/null) || return 0
+  printf '%s' "${out}" | sed -n '1s/.*(\([0-9a-f]\{40\}\)).*/\1/p'
+}
+
 rc=0
 
 while read -r version project branch rest; do
@@ -103,15 +133,35 @@ while read -r version project branch rest; do
 
   commit=$(git -C "${src}" rev-parse HEAD 2>/dev/null || echo "")
   dist="${dists_dir}/${version}"
-  recorded=""
-  [[ -r "${dist}/.source-commit" ]] && recorded=$(cat "${dist}/.source-commit")
+  archive=$(ls -1t "${src}"/apache-maven/target/apache-maven-*-bin.zip 2>/dev/null | head -1 || true)
+  installed=$(dist_commit "${dist}")
 
-  if [[ "${force}" != "true" && -n "${commit}" && "${commit}" == "${recorded}" && -x "${dist}/bin/mvn" ]]; then
-    echo "[$(stamp)] ${version}: unchanged (${commit:0:8}) -- nothing to do"
+  # Four states, in the order that makes each one cheap to decide.
+  refresh=""
+  if [[ "${force}" == "true" ]]; then
+    refresh="forced"
+  elif [[ ! -x "${dist}/bin/mvn" ]]; then
+    refresh="not installed yet"
+  elif [[ -n "${archive}" && "${archive}" -nt "${dist}/bin/mvn" ]]; then
+    # An archive younger than the installed distribution is a rebuild we have
+    # not taken. This condition alone would have caught the m4-40x case, and
+    # it needs nothing from the distribution's version string.
+    refresh="archive rebuilt $(date -r "${archive}" '+%F %T')"
+  elif [[ -n "${commit}" && -n "${installed}" && "${commit}" != "${installed}" ]]; then
+    # Behind the source, with no newer archive to fix it: only a build can,
+    # and this script deliberately does not build. Say so on every run rather
+    # than tolerating it quietly -- quiet tolerance is what cost six weeks.
+    echo "[$(stamp)] ${version}: STALE -- distribution is ${installed:0:8}, source is ${commit:0:8}, and no archive is newer. Build ${project} to refresh it." >&2
+    rc=1; continue
+  elif [[ -z "${installed}" ]]; then
+    echo "[$(stamp)] ${version}: current by archive mtime (reports no commit, so it cannot be checked against ${commit:0:8}) -- nothing to do"
+    continue
+  else
+    echo "[$(stamp)] ${version}: unchanged (${installed:0:8}) -- nothing to do"
     continue
   fi
+  echo "[$(stamp)] ${version}: refreshing -- ${refresh}"
 
-  archive=$(ls -1t "${src}"/apache-maven/target/apache-maven-*-bin.zip 2>/dev/null | head -1 || true)
   if [[ -z "${archive}" ]]; then
     echo "[$(stamp)] ${version}: no -bin.zip under ${project}/apache-maven/target -- build it first" >&2
     rc=1; continue
@@ -155,6 +205,14 @@ while read -r version project branch rest; do
   # in install-launchd (grep -q SIGPIPEing launchctl).
   if out=$("${target}/bin/mvn" -v 2>&1); then
     echo "[$(stamp)] ${version}: ${out%%$'\n'*}"
+    # The archive itself can be behind the source -- a target/ left over from
+    # an earlier commit. Unpacking it is still the right move (it is the
+    # newest distribution we have), but the result must not pass for current.
+    fresh=$(dist_commit "${dist}")
+    if [[ -n "${commit}" && -n "${fresh}" && "${commit}" != "${fresh}" ]]; then
+      echo "[$(stamp)] ${version}: the archive was built at ${fresh:0:8}, source is at ${commit:0:8} -- rebuild ${project}" >&2
+      rc=1
+    fi
   else
     echo "[$(stamp)] ${version}: installed but 'mvn -v' failed" >&2
     rc=1
