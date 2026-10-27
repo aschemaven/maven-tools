@@ -1019,6 +1019,19 @@ exec_mvn() {
       cd "${project_dir}"
       [[ -n "${v_javahome}" ]] && export JAVA_HOME="${v_javahome}"
       [[ -n "${proj_javahome}" ]] && export JAVA_HOME="${proj_javahome}"
+      # A cell's JDK must win on PATH too, not only in JAVA_HOME. The
+      # jqAssistant baseline near the top of this file runs at FILE level and
+      # prepends ${JQA_JDK_HOME}/bin -- JDK 25 by default -- so it leaked into
+      # every matrix cell on every column. Maven itself was unaffected (it
+      # honours JAVA_HOME), but a tool resolved from PATH ran under the wrong
+      # JDK. Measured 2026-10-27 on plugins/core-4/maven-compiler-plugin: it
+      # forks the bare name "javac" (AbstractCompilerMojo.DEFAULT_EXECUTABLE),
+      # ProcessBuilder found 25.0.4-tem, and the resulting v69
+      # module-info.class could not be read back by the JDK 21 Maven JVM --
+      # 1 of 84 ITs failing on three columns, for six weeks.
+      if [[ -n "${JAVA_HOME:-}" ]]; then
+        export PATH="${JAVA_HOME}/bin:${PATH#"${JQA_JDK_HOME:-}/bin:"}"
+      fi
       # The CLI override above does not reach a FORKED build. We export the
       # split properties through MAVEN_OPTS, and MAVEN_OPTS is an environment
       # variable: an integration test that spawns its own Maven inherits
