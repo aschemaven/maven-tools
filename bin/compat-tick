@@ -137,18 +137,29 @@ matrix_running() {
   [[ -n "${lp}" ]] && kill -0 "${lp}" 2>/dev/null
 }
 
+# should_build() prints the one reason it declines, and the caller must not add
+# a second. Measured 2026-10-27: a tick that correctly reported "jqa-nightly is
+# running" went on to print "outside nightly+idle" as well, which reads as a
+# second and contradictory explanation for the same decision. decline() returns
+# 0 so set -e does not fire on the mark itself; each caller still returns 1.
+skip_explained=false
+decline() {
+  echo "compat-tick: $1"
+  skip_explained=true
+}
+
 should_build() {
   # Checked before FORCE_BUILD: yielding to the nightly or waiting for an idle
   # window is policy a manual run may override, but two matrices writing the
   # same variants/<v>/cells/<project>.json is not -- that is corruption, plus
   # the dropped-change-set problem above.
   if matrix_running; then
-    echo "compat-tick: a compat matrix is still running; skipping the build"
+    decline "a compat matrix is still running; skipping the build"
     return 1
   fi
   if ${FORCE_BUILD}; then return 0; fi
   if nightly_running; then
-    echo "compat-tick: jqa-nightly is running; skipping the build"
+    decline "jqa-nightly is running; skipping the build"
     return 1
   fi
   # Yielding is not enough on its own. run-compat-matrix stands down for the
@@ -163,7 +174,7 @@ should_build() {
   local due=""
   if [[ "${NIGHTLY_LEAD_MIN}" -gt 0 ]] && due=$(nightly_due_in) \
      && [[ "${due}" -le "${NIGHTLY_LEAD_MIN}" ]]; then
-    echo "compat-tick: jqa-nightly launches in ${due} min (lead ${NIGHTLY_LEAD_MIN}); not starting a round"
+    decline "jqa-nightly launches in ${due} min (lead ${NIGHTLY_LEAD_MIN}); not starting a round"
     return 1
   fi
   if [[ "${role}" == "runner" ]]; then return 0; fi
@@ -174,12 +185,26 @@ should_build() {
 }
 
 # --- 1. sync (only a real repo tree) --------------------------------------
-if [[ "${COMPAT_SYNC}" != "false" && -d "${maven_dir}/.repo" ]]; then
+# Not while something is building in those trees. `repo sync` moves working
+# trees, and until now the only guard sat in should_build(): the round was
+# correctly skipped while the nightly ran, but this sync went ahead anyway and
+# could land new commits in a checkout that jqa-nightly was halfway through
+# `clean install`. The build then measures a tree that changed beneath it, and
+# the commit recorded for that cell is not the one that was built. Observed
+# 2026-10-27 22:57, syncing while the nightly was in core/maven-4.0.x.
+# Skipping is cheap: the HEADs stay where they were, so step 2 finds no change
+# and the next tick syncs -- and jqa-nightly fetches its own repositories
+# regardless, so nothing depends on this sync having run.
+if [[ "${COMPAT_SYNC}" == "false" || ! -d "${maven_dir}/.repo" ]]; then
+  echo "compat-tick: skip sync (no ${maven_dir}/.repo or COMPAT_SYNC=false)"
+elif nightly_running; then
+  echo "compat-tick: jqa-nightly is running; skipping the repo sync"
+elif matrix_running; then
+  echo "compat-tick: a compat matrix is still running; skipping the repo sync"
+else
   echo "compat-tick: repo sync in ${maven_dir}"
   ( CDPATH= cd "${maven_dir}" && repo sync -j"$(detect_cpu_count)" ) \
     || echo "WARNING: repo sync failed; continuing with current HEADs" >&2
-else
-  echo "compat-tick: skip sync (no ${maven_dir}/.repo or COMPAT_SYNC=false)"
 fi
 
 # --- 2. detect changes ----------------------------------------------------
@@ -324,7 +349,9 @@ elif should_build; then
     rm -f "${done_log}"
   fi
 else
-  echo "compat-tick: role '${role}' not building now (outside nightly+idle; FORCE_BUILD=true to override)."
+  if [[ "${skip_explained}" != "true" ]]; then
+    echo "compat-tick: role '${role}' not building now (outside nightly+idle; FORCE_BUILD=true to override)."
+  fi
   echo "compat-tick: would rebuild components=[${changed_components% }] variants=[${changed_variants% }]"
   rm -f "${current_heads}" "${current_vars}"   # leave state stale so next allowed tick still sees the change
 fi
