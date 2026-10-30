@@ -54,7 +54,14 @@ root=$(CDPATH= cd "${dir}/.." && pwd)
 cd "${root}" || exit 1
 
 : "${JQA_MVN_VERSION:=3.9.16}"
-: "${BUILD_GOALS:=clean install -fae -Dsurefire.rerunFailingTestsCount=2}"
+# -Dspotless.apply.skip: we must not rewrite the sources we exist to observe.
+# maven-parent binds spotless:apply (not check) whenever env.CI is unset, which
+# it is here -- so the build reformats upstream code in place. Measured
+# 2026-10-27: spotless:3.10.2:apply changed a line in doxia/sitetools at
+# 23:52:33, `repo sync` then refused the tree ("contains uncommitted changes")
+# and five nightlies died at manifest-sync (10-20/21/22, 10-28/29). Skipping
+# apply is enough and nothing more: with env.CI unset, check is never bound.
+: "${BUILD_GOALS:=clean install -fae -Dsurefire.rerunFailingTestsCount=2 -Dspotless.apply.skip=true}"
 
 # 1. shared cache: reproduce the direnv environment for non-interactive shells
 if [[ -z "${MAVEN_TOOLS_CACHE:-}" ]] && command -v direnv >/dev/null 2>&1; then
