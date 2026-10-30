@@ -15,6 +15,17 @@
                     <id>central</id>
                     <url>https://repo1.maven.org/maven2</url>
                 </repository>
+                <!-- No OSSRH entries here any more. oss.sonatype.org and
+                     s01.oss.sonatype.org were decommissioned with the Central
+                     Portal migration: measured 2026-10-30, both answer HTTP 404
+                     on the repository root itself, not merely on a missing
+                     artifact. Worse, each declared only a snapshots block and
+                     no releases block, so releases defaulted to enabled and
+                     every release artifact missing from the local repository
+                     was looked up at two dead hosts, in every one of the 122
+                     builds a night. Their successor is the Central Portal
+                     snapshot host, declared in the jqa-plugins profile below,
+                     which is the only thing we actually need from it. -->
                 <repository>
                     <id>apache.snapshots</id>
                     <name>Apache Snapshot Repository</name>
@@ -22,24 +33,6 @@
                     <releases>
                         <enabled>false</enabled>
                     </releases>
-                    <snapshots>
-                        <enabled>true</enabled>
-                        <updatePolicy>daily</updatePolicy>
-                    </snapshots>
-                </repository>
-                <repository>
-                    <id>ossrh (old)</id>
-                    <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
-                    <layout>default</layout>
-                    <snapshots>
-                        <enabled>true</enabled>
-                        <updatePolicy>daily</updatePolicy>
-                    </snapshots>
-                </repository>
-                <repository>
-                    <id>ossrh (new)</id>
-                    <url>https://s01.oss.sonatype.org/content/repositories/snapshots/</url>
-                    <layout>default</layout>
                     <snapshots>
                         <enabled>true</enabled>
                         <updatePolicy>daily</updatePolicy>
