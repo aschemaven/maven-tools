@@ -482,7 +482,17 @@ ensure_latest_jdk
 if [[ "${dry}" == "true" ]]; then
   echo "[dry-run] would run 'repo sync'"
 else
-  sync_manifest || finish FAILED manifest-sync "${state_dir}"
+  # NOT fatal. A single checkout can refuse to sync -- `repo sync` reports
+  # "contains uncommitted changes" and exits non-zero even though it synced
+  # every other project -- and the whole night used to die on it: five lost
+  # cycles (2026-10-20/21/22, 10-28/29), the last two because our own
+  # spotless:apply had reformatted one line in doxia/sitetools. One repository
+  # out of 122 must never cost the other 121. Same policy compat-tick already
+  # had: warn, keep the HEADs we have, carry on.
+  sync_manifest || {
+    echo "WARNING: repo sync did not complete; continuing with the current HEADs" >&2
+    printf '%s\n' "$(stamp)" > "${state_dir}/sync-incomplete"
+  }
 fi
 
 # --- 1. fetch + record HEADs ---------------------------------------------
