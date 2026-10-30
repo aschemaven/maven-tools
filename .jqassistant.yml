@@ -16,10 +16,14 @@ jqassistant:
       # Commit.sha) were located by thread sampling and EXPLAIN instead.
   repositories:
     remotes:
-      github-ascheman:
-        url: https://maven.pkg.github.com/ascheman/jqa-groovy-plugin
-        username: THIS-DOES-NOT-MATTER
-        password: ${GITHUB_TOKEN}
+      # Our own plugins publish snapshots here. 0.1.1-SNAPSHOT of
+      # jqa-github-config-plugin, which this file used to ask for, never
+      # existed on main -- "Reserve 0.1.0 for the first release" reset the
+      # version to 0.1.0-SNAPSHOT -- and the GitHub Packages copy was removed
+      # with the 2026-10-27 releases, which is what broke analyze. The Portal
+      # serves 0.1.0-SNAPSHOT (0.1.0-20261027.201906-1) and needs no token.
+      central-portal-snapshots:
+        url: https://central.sonatype.com/repository/maven-snapshots/
         releases:
           enabled: false
         snapshots:
@@ -30,7 +34,7 @@ jqassistant:
       version: 0.2.0
     - group-id: net.aschemann.jqassistant.plugins
       artifact-id: jqa-github-config-plugin
-      version: 0.1.1-SNAPSHOT
+      version: 0.1.0-SNAPSHOT
     - group-id: de.kontext-e.jqassistant.plugin
       artifact-id: jqassistant.plugin.git
       version: 2.4.2

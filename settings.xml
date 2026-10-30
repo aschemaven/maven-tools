@@ -45,24 +45,60 @@
                         <updatePolicy>daily</updatePolicy>
                     </snapshots>
                 </repository>
+            </repositories>
+        </profile>
+
+        <!-- Everything the jQAssistant plugins are resolved from, and nothing
+             else. Deliberately not activeByDefault: while these repositories
+             sat in the default profile, every Maven run in the harness asked
+             GitHub Packages for every artifact it resolved. Each build log
+             showed it, 122 projects a night, for Mimir, Plexus, JGit and the
+             rest of Maven Central. That is latency on every resolution plus a
+             dependency of all 122 upstream builds on a personal access token.
+             Only the jQAssistant scan and analyze stages need these, and
+             bin/run-jqa activates the profile for exactly those (see
+             jqa_common_opts).
+
+             The servers section below stays global: without a matching
+             repository the credentials do nothing, and duplicating them per
+             profile would only create a second place to forget them. -->
+        <profile>
+            <id>jqa-plugins</id>
+            <repositories>
                 <repository>
-                    <id>github-ascheman-jqa-git</id>
-                    <name>GitHub Packages jQA Git Plugin / Aschemann</name>
-                    <url>https://maven.pkg.github.com/ascheman/jqassistant-git-plugin</url>
+                    <!-- The Central Portal snapshot host. The two OSSRH entries
+                         in the default profile are its predecessors and do NOT
+                         serve it, which is why analyze failed resolving
+                         jqa-github-config-plugin straight against repo1. -->
+                    <id>central-portal-snapshots</id>
+                    <name>Central Portal Snapshots</name>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
                     <snapshots>
                         <enabled>true</enabled>
                         <updatePolicy>always</updatePolicy>
                     </snapshots>
                 </repository>
-                <repository>
-                    <id>github-ascheman-jqa-github</id>
-                    <name>GitHub Packages jQA GitHub Plugin / Aschemann</name>
-                    <url>https://maven.pkg.github.com/ascheman/jqassistant-github-plugin</url>
-                    <snapshots>
-                        <enabled>true</enabled>
-                        <updatePolicy>always</updatePolicy>
-                    </snapshots>
-                </repository>
+                    <repository>
+                        <id>github-ascheman-jqa-git</id>
+                        <name>GitHub Packages jQA Git Plugin / Aschemann</name>
+                        <url>https://maven.pkg.github.com/ascheman/jqassistant-git-plugin</url>
+                        <snapshots>
+                            <enabled>true</enabled>
+                            <updatePolicy>always</updatePolicy>
+                        </snapshots>
+                    </repository>
+                    <repository>
+                        <id>github-ascheman-jqa-github</id>
+                        <name>GitHub Packages jQA GitHub Plugin / Aschemann</name>
+                        <url>https://maven.pkg.github.com/ascheman/jqassistant-github-plugin</url>
+                        <snapshots>
+                            <enabled>true</enabled>
+                            <updatePolicy>always</updatePolicy>
+                        </snapshots>
+                    </repository>
             </repositories>
         </profile>
     </profiles>
