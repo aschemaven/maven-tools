@@ -27,13 +27,13 @@ jqassistant:
   plugins:
     - group-id: net.aschemann.jqassistant.plugins
       artifact-id: jqa-groovy-plugin
-      version: 0.2.0-SNAPSHOT
+      version: 0.2.0
     - group-id: net.aschemann.jqassistant.plugins
       artifact-id: jqa-github-config-plugin
       version: 0.1.1-SNAPSHOT
     - group-id: de.kontext-e.jqassistant.plugin
       artifact-id: jqassistant.plugin.git
-      version: 2.4.3-SNAPSHOT
+      version: 2.4.2
   scan:
     continue-on-error: true
     # We need this with the Maven scanner as it only scans target/ by default
