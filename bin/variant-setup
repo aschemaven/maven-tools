@@ -15,15 +15,16 @@ set -eu -o pipefail
 #                       so variants/<name>/maven/bin/mvn resolves. SNAPSHOT /
 #                       branch-built distros are NOT created here (they need a
 #                       separate prepare/build step); a warning is printed.
-#     - settings.xml -> copied from the shared template (top-level settings.xml)
-#                       if the variant does not already ship its own.
+#     - settings.xml -> NOT created. The shared top-level settings.xml is used
+#                       through variant_settings(); a variant may still ship
+#                       its own, which then wins.
 #     - repository/, logs/, cells/  (empty dirs, ready for runs)
 #
 #   The variant's Maven binary, settings, local repo, logs and JDK are then
 #   honoured by run-maven via VARIANT=<name> (see common-functions.sh).
 #
-#   Idempotent: re-running refreshes the symlink and missing dirs without
-#   clobbering an existing variant-specific settings.xml.
+#   Idempotent: re-running refreshes the symlink and missing dirs and never
+#   touches a variant-specific settings.xml.
 
 dir=$(dirname "${0}")
 source "${dir}/common-functions.sh"
@@ -107,11 +108,23 @@ for name in "${variants[@]}"; do
   fi
 
   # --- settings.xml -------------------------------------------------------
+  # Deliberately NOT copied. variant_settings() already falls back to the
+  # shared ${root}/settings.xml when a variant has none, so a copy buys
+  # nothing -- and it cost us a silent fork: this block used to KEEP an
+  # existing copy, so a change to the template never reached the variants.
+  # Measured 2026-10-30, when the jqa-plugins profile was added: all twelve
+  # variant copies were byte-identical to the template and every one of them
+  # still had to be refreshed by hand. A variant that genuinely needs its own
+  # settings can still have one; drop the file in and variant_settings()
+  # prefers it. Report what is there either way, so a fork is visible.
   if [[ -e "${v_root}/settings.xml" ]]; then
-    settings_note="settings.xml (kept)"
+    if cmp -s "${root}/settings.xml" "${v_root}/settings.xml" 2>/dev/null; then
+      settings_note="settings.xml (own copy, identical to the template -- safe to remove)"
+    else
+      settings_note="settings.xml (own copy, DIFFERS from the template -- kept, and it wins)"
+    fi
   elif [[ -r "${root}/settings.xml" ]]; then
-    cp "${root}/settings.xml" "${v_root}/settings.xml"
-    settings_note="settings.xml (copied from template)"
+    settings_note="settings.xml (shared template ${root}/settings.xml)"
   else
     settings_note="NO settings.xml (template ${root}/settings.xml missing)"
   fi
